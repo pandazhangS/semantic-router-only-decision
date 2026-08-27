@@ -99,6 +99,19 @@ providers:
         health_check_timeout: 2s
 
 routing:
+  modelCards:
+    - name: qwen/qwen3.5-rocm
+      description: Default low-cost model for general and coding tasks.
+      modality: text
+      quality_score: 0.7
+    - name: google/gemini-2.5-flash-lite
+      description: Cheap fast-answer model.
+      modality: text
+      quality_score: 0.6
+    - name: google/gemini-3.1-pro
+      description: High-quality reasoning model.
+      modality: text
+      quality_score: 0.9
   signals:
     keywords:
       - name: code_request_markers
@@ -116,32 +129,6 @@ routing:
         method: regex
         keywords: ["quick answer", "answer briefly", "keep it short", "one sentence", "simple explanation", "tl;dr", "briefly explain", "concise answer", "简短回答", "简单解释", "直接回答"]
         case_sensitive: false
-    embeddings:
-      - name: fast_qa_en
-        threshold: 0.72
-        aggregation_method: max
-        candidates:
-          - Who are you?
-          - What does CPU stand for?
-          - What is the capital of France?
-          - Briefly explain what an API is.
-          - What is the boiling point of water?
-      - name: reasoning_general_en
-        threshold: 0.78
-        aggregation_method: max
-        candidates:
-          - Compare multiple approaches and recommend the best one with trade-offs.
-          - Analyze the root cause step by step and justify the conclusion.
-          - Build a rigorous argument from first principles.
-          - Synthesize several constraints into a single recommendation.
-      - name: code_general
-        threshold: 0.75
-        aggregation_method: max
-        candidates:
-          - Debug this Python stack trace and explain the likely bug.
-          - Refactor this TypeScript function to reduce duplication.
-          - Write a SQL query to aggregate weekly active users.
-          - Explain the difference between sync and async execution.
 
   decisions:
     - description: Coding and technical Q&A lane.
@@ -151,8 +138,6 @@ routing:
         conditions:
           - name: code_request_markers
             type: keyword
-          - name: code_general
-            type: embedding
         operator: OR
       modelRefs:
         - model: qwen/qwen3.5-rocm
@@ -165,8 +150,6 @@ routing:
         conditions:
           - name: reasoning_request_markers
             type: keyword
-          - name: reasoning_general_en
-            type: embedding
         operator: OR
       modelRefs:
         - model: google/gemini-3.1-pro
@@ -182,8 +165,6 @@ routing:
         conditions:
           - name: simple_request_markers
             type: keyword
-          - name: fast_qa_en
-            type: embedding
         operator: OR
       modelRefs:
         - model: google/gemini-2.5-flash-lite
