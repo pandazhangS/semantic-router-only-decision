@@ -23,7 +23,10 @@ WORKDIR /build
 # 依赖层：Cargo.toml/Cargo.lock 不变则命中缓存
 COPY candle-binding/Cargo.toml candle-binding/Cargo.lock ./candle-binding/
 COPY nlp-binding/Cargo.toml nlp-binding/Cargo.lock ./nlp-binding/
-RUN cargo fetch --manifest-path candle-binding/Cargo.toml \
+# cargo fetch 需要 src/lib.rs 存在（占位，随后被真实源码覆盖）
+RUN mkdir -p candle-binding/src nlp-binding/src \
+ && touch candle-binding/src/lib.rs nlp-binding/src/lib.rs \
+ && cargo fetch --manifest-path candle-binding/Cargo.toml \
  && cargo fetch --manifest-path nlp-binding/Cargo.toml
 # 源码层
 COPY candle-binding/ ./candle-binding/
