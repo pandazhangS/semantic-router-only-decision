@@ -26,15 +26,6 @@ func (b *classifierOptionBuilder) addCategoryClassifier(categoryMapping *Categor
 	b.options = append(b.options, withCategory(categoryMapping, categoryInitializer, categoryInference))
 }
 
-func (b *classifierOptionBuilder) addMCPCategoryClassifier() {
-	if !b.cfg.MCPCategoryModel.Enabled {
-		return
-	}
-	mcpInit := createMCPCategoryInitializer()
-	mcpInf := createMCPCategoryInference(mcpInit)
-	b.options = append(b.options, withMCPCategory(mcpInit, mcpInf))
-}
-
 func buildJailbreakDependencies(cfg *config.RouterConfig, jailbreakMapping *JailbreakMapping) (JailbreakInitializer, SequenceClassifierBackend, error) {
 	jailbreakInference, err := createJailbreakInference(&cfg.PromptGuard, cfg, jailbreakMapping)
 	if err != nil {

@@ -1,7 +1,5 @@
 package selection
 
-import "fmt"
-
 // This file centralizes Tier() and ExternalDependencies() implementations
 // for all selection algorithms. Keeping them in one place avoids adding lines
 // to algorithm files that are already at or over the 800-line hard limit.
@@ -127,21 +125,4 @@ func (g *GMTRouterSelector) ExternalDependencies() []Dependency {
 		})
 	}
 	return deps
-}
-
-// Tier returns the production readiness tier
-func (a *MLSelectorAdapter) Tier() AlgorithmTier {
-	return TierExperimental
-}
-
-// ExternalDependencies returns external dependencies for ML-based selectors
-func (a *MLSelectorAdapter) ExternalDependencies() []Dependency {
-	return []Dependency{
-		{
-			Name:        fmt.Sprintf("Pre-trained %s model", a.method),
-			Type:        DependencyPretrainedModel,
-			Description: "ML model weights for query-to-model classification",
-			Required:    true,
-		},
-	}
 }

@@ -32,11 +32,6 @@ func (c *Classifier) ClassifyCategoryWithEntropy(text string) (string, float64, 
 		return "", 0.0, entropy.ReasoningDecision{}, fmt.Errorf("category classification is not properly configured")
 	}
 
-	// Fall back to MCP
-	if c.IsMCPCategoryEnabled() && c.mcpCategoryInference != nil {
-		return c.classifyCategoryWithEntropyMCP(text)
-	}
-
 	return "", 0.0, entropy.ReasoningDecision{}, fmt.Errorf("no category classification method available")
 }
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
-	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
 )
 
 // NewLegacyClassifierFromConfig loads mapping assets and builds the legacy
@@ -35,11 +34,6 @@ func NewLegacyClassifierFromConfig(cfg *config.RouterConfig) (*Classifier, error
 }
 
 func loadLegacyCategoryMapping(cfg *config.RouterConfig) (*CategoryMapping, error) {
-	useMCPCategories := cfg.CategoryModel.ModelID == "" && cfg.MCPCategoryModel.Enabled
-	if useMCPCategories && cfg.UsesSignalTypeInRouting(config.SignalTypeDomain) {
-		logging.Infof("Category mapping will be loaded from MCP server")
-		return nil, nil
-	}
 	if !cfg.NeedsCategoryMappingForRouting() {
 		return nil, nil
 	}

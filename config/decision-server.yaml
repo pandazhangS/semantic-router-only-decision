@@ -1,0 +1,205 @@
+# decision-server 示例配置
+#
+# 这是裁剪后的决策服务（cmd/decision-server）的配置示例：
+#   - 输入请求上下文（messages/text）→ 输出 model_id + model_list
+#   - embedding 信号走远程 OpenAI-compatible API（无本地模型）
+#   - keyword 信号用纯 Go regex 方法（不依赖 nlp-binding）
+#   - 不包含 ExtProc 监听器、缓存、回放、记忆等外围配置
+#
+# 启动：
+#   decision-server -config config/decision-server.yaml -listen :8080
+#
+# 环境变量：
+#   EMBEDDING_API_KEY  远程 embedding 服务的 API key（endpoint.api_key_env 指定）
+
+version: v0.3
+
+global:
+  router:
+    auto_model_names:
+      - vllm-sr/auto
+    learning:
+      enabled: false
+
+providers:
+  defaults:
+    default_model: qwen/qwen3.5-rocm
+    default_reasoning_effort: low
+    reasoning_families:
+      qwen3:
+        parameter: enable_thinking
+        type: chat_template_kwargs
+  models:
+    - backend_refs:
+        - endpoint: vllm:8000
+          name: vllm_primary
+          protocol: http
+          weight: 1
+      name: qwen/qwen3.5-rocm
+      pricing:
+        cached_input_per_1m: 0
+        completion_per_1m: 0
+        currency: USD
+        prompt_per_1m: 0
+      provider_model_id: qwen/qwen3.5-rocm
+      reliability:
+        lb_policy: least_request
+        retry_count: 2
+        retry_on: connect-failure,refused-stream
+        consecutive_5xx: 5
+        base_ejection_time: 30s
+        max_ejection_percent: 50
+        health_check_path: /health
+        health_check_interval: 10s
+        health_check_timeout: 2s
+      reasoning_family: qwen3
+    - backend_refs:
+        - endpoint: vllm:8000
+          name: vllm_primary
+          protocol: http
+          weight: 1
+      name: google/gemini-2.5-flash-lite
+      pricing:
+        cached_input_per_1m: 0.002
+        completion_per_1m: 0.04
+        currency: USD
+        prompt_per_1m: 0.01
+      provider_model_id: google/gemini-2.5-flash-lite
+      reliability:
+        lb_policy: least_request
+        retry_count: 2
+        retry_on: connect-failure,refused-stream
+        consecutive_5xx: 5
+        base_ejection_time: 30s
+        max_ejection_percent: 50
+        health_check_path: /health
+        health_check_interval: 10s
+        health_check_timeout: 2s
+    - backend_refs:
+        - endpoint: vllm:8000
+          name: vllm_primary
+          protocol: http
+          weight: 1
+      name: google/gemini-3.1-pro
+      pricing:
+        cached_input_per_1m: 0.12
+        completion_per_1m: 1.92
+        currency: USD
+        prompt_per_1m: 0.48
+      provider_model_id: google/gemini-3.1-pro
+      reliability:
+        lb_policy: least_request
+        retry_count: 2
+        retry_on: connect-failure,refused-stream
+        consecutive_5xx: 5
+        base_ejection_time: 30s
+        max_ejection_percent: 50
+        health_check_path: /health
+        health_check_interval: 10s
+        health_check_timeout: 2s
+
+routing:
+  signals:
+    keywords:
+      - name: code_request_markers
+        operator: OR
+        method: regex
+        keywords: ["code", "function", "class", "stack trace", "api", "sql", "python", "typescript", "debug", "refactor", "bug", "endpoint", "algorithm", "recursion"]
+        case_sensitive: false
+      - name: reasoning_request_markers
+        operator: OR
+        method: regex
+        keywords: ["think step by step", "reason carefully", "prove rigorously", "prove", "proof", "derive the formula", "compare trade-offs", "analyze the root cause", "first principles", "逐步推理", "严格证明", "证明", "推导公式", "深入分析"]
+        case_sensitive: false
+      - name: simple_request_markers
+        operator: OR
+        method: regex
+        keywords: ["quick answer", "answer briefly", "keep it short", "one sentence", "simple explanation", "tl;dr", "briefly explain", "concise answer", "简短回答", "简单解释", "直接回答"]
+        case_sensitive: false
+    embeddings:
+      - name: fast_qa_en
+        threshold: 0.72
+        aggregation_method: max
+        candidates:
+          - Who are you?
+          - What does CPU stand for?
+          - What is the capital of France?
+          - Briefly explain what an API is.
+          - What is the boiling point of water?
+      - name: reasoning_general_en
+        threshold: 0.78
+        aggregation_method: max
+        candidates:
+          - Compare multiple approaches and recommend the best one with trade-offs.
+          - Analyze the root cause step by step and justify the conclusion.
+          - Build a rigorous argument from first principles.
+          - Synthesize several constraints into a single recommendation.
+      - name: code_general
+        threshold: 0.75
+        aggregation_method: max
+        candidates:
+          - Debug this Python stack trace and explain the likely bug.
+          - Refactor this TypeScript function to reduce duplication.
+          - Write a SQL query to aggregate weekly active users.
+          - Explain the difference between sync and async execution.
+
+  decisions:
+    - description: Coding and technical Q&A lane.
+      name: code_general
+      priority: 100
+      rules:
+        conditions:
+          - name: code_request_markers
+            type: keyword
+          - name: code_general
+            type: embedding
+        operator: OR
+      modelRefs:
+        - model: qwen/qwen3.5-rocm
+          reasoning_effort: medium
+          use_reasoning: true
+    - description: Deep reasoning lane for complex analysis.
+      name: reasoning_deep
+      priority: 90
+      rules:
+        conditions:
+          - name: reasoning_request_markers
+            type: keyword
+          - name: reasoning_general_en
+            type: embedding
+        operator: OR
+      modelRefs:
+        - model: google/gemini-3.1-pro
+          reasoning_effort: high
+          use_reasoning: true
+        - model: qwen/qwen3.5-rocm
+          reasoning_effort: medium
+          use_reasoning: true
+    - description: Cheap fast-answer lane.
+      name: fast_qa
+      priority: 80
+      rules:
+        conditions:
+          - name: simple_request_markers
+            type: keyword
+          - name: fast_qa_en
+            type: embedding
+        operator: OR
+      modelRefs:
+        - model: google/gemini-2.5-flash-lite
+          use_reasoning: false
+
+model_catalog:
+  embeddings:
+    semantic:
+      embedding_config:
+        backend: openai_compatible
+        model_type: remote
+        target_dimension: 1024
+      endpoint:
+        base_url: http://embedding-service:8000/v1
+        model: BAAI/bge-m3
+        api_key_env: EMBEDDING_API_KEY
+        timeout_seconds: 5
+        max_retries: 2
+        dimensions: 1024

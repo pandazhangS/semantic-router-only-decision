@@ -3,9 +3,7 @@ package classification
 import (
 	"fmt"
 
-	candle "github.com/vllm-project/semantic-router/candle-binding"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
-	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/looper"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
 )
 
@@ -82,10 +80,6 @@ func (c *Classifier) initializeHallucinationDetector() error {
 			return fmt.Errorf("failed to initialize endpoint hallucination detector: %w", err)
 		}
 		c.endpointHallucinationDetector = detector
-		// Wire the detect callback but pass nil for NLI: the endpoint backend
-		// does not ship a local NLI model, so panel-mode fusion grounding will
-		// gracefully skip ("nli backend not configured") under on_error: skip.
-		wireEndpointFusionGroundingBackend(detector.Detect)
 		return nil
 	}
 
@@ -105,49 +99,7 @@ func (c *Classifier) initializeHallucinationDetector() error {
 
 	c.initializeHallucinationNLI(detector)
 	c.hallucinationDetector = detector
-	wireFusionGroundingBackends(detector.Detect)
 	return nil
-}
-
-// wireFusionGroundingBackends injects the candle-backed NLI + hallucination
-// detection functions into the looper package so grounding-aware fusion can score
-// panel responses. This keeps the candle/CGO dependency out of the looper import
-// graph (the looper package stays hermetically testable).
-func wireFusionGroundingBackends(detect func(context, question, answer string) (*HallucinationResult, error)) {
-	looper.SetGroundingBackends(
-		func(premise, hypothesis string) (float32, float32, error) {
-			r, err := candle.ClassifyNLI(premise, hypothesis)
-			if err != nil {
-				return 0, 0, err
-			}
-			return r.EntailmentProb, r.ContradictProb, nil
-		},
-		func(context, question, answer string) ([]string, float32, error) {
-			r, err := detect(context, question, answer)
-			if err != nil {
-				return nil, 0, err
-			}
-			return r.UnsupportedSpans, r.Confidence, nil
-		},
-	)
-}
-
-// wireEndpointFusionGroundingBackend injects the endpoint-backed hallucination
-// detection into the looper but leaves the NLI callback nil. The endpoint
-// backend does not include a local NLI model, so panel-mode fusion grounding
-// (which requires NLI) will gracefully degrade via the looper's on_error policy.
-// Context-mode grounding (using the detect callback) works normally.
-func wireEndpointFusionGroundingBackend(detect func(context, question, answer string) (*HallucinationResult, error)) {
-	looper.SetGroundingBackends(
-		nil, // NLI not available with endpoint backend
-		func(context, question, answer string) ([]string, float32, error) {
-			r, err := detect(context, question, answer)
-			if err != nil {
-				return nil, 0, err
-			}
-			return r.UnsupportedSpans, r.Confidence, nil
-		},
-	)
 }
 
 func (c *Classifier) initializeHallucinationNLI(detector *HallucinationDetector) {

@@ -45,9 +45,6 @@ type ModelSelectionConfig struct {
 	// Hybrid configuration (used when method is "hybrid")
 	Hybrid *HybridConfig `yaml:"hybrid,omitempty"`
 
-	// ML configuration (used for knn, kmeans, svm methods)
-	ML *MLSelectorConfig `yaml:"ml,omitempty"`
-
 	// RLDriven configuration (used when method is "rl_driven")
 	// Implements Router-R1 reward structure for RL training
 	RLDriven *RLDrivenConfig `yaml:"rl_driven,omitempty"`
@@ -290,52 +287,6 @@ func (f *Factory) CreateAll() *Registry {
 		hybridSelector.SetLookupTable(f.lookupTable)
 	}
 	registry.Register(MethodHybrid, hybridSelector)
-
-	// Create ML-based selectors (KNN, KMeans, SVM)
-	mlCfg := f.cfg.ML
-	if mlCfg == nil {
-		mlCfg = DefaultMLSelectorConfig()
-	}
-	mlEmbeddingConfig := f.defaultEmbeddingConfig
-	if mlCfg.ModelType != "" {
-		mlEmbeddingConfig = EmbeddingConfig{
-			ModelType:       mlCfg.ModelType,
-			TargetDimension: mlCfg.EmbeddingDim,
-		}
-	}
-	mlSelectorEmbedding := f.embeddingFuncFor(mlEmbeddingConfig)
-
-	// Create KNN selector
-	knnAdapter, err := CreateKNNSelector(mlCfg, mlSelectorEmbedding)
-	if err != nil {
-		logging.Warnf("[SelectionFactory] Failed to create KNN selector: %v", err)
-	} else {
-		registry.Register(MethodKNN, knnAdapter)
-	}
-
-	// Create KMeans selector
-	kmeansAdapter, err := CreateKMeansSelector(mlCfg, mlSelectorEmbedding)
-	if err != nil {
-		logging.Warnf("[SelectionFactory] Failed to create KMeans selector: %v", err)
-	} else {
-		registry.Register(MethodKMeans, kmeansAdapter)
-	}
-
-	// Create SVM selector
-	svmAdapter, err := CreateSVMSelector(mlCfg, mlSelectorEmbedding)
-	if err != nil {
-		logging.Warnf("[SelectionFactory] Failed to create SVM selector: %v", err)
-	} else {
-		registry.Register(MethodSVM, svmAdapter)
-	}
-
-	// Create MLP selector (GPU-accelerated via Candle)
-	mlpAdapter, err := CreateMLPSelector(mlCfg, mlSelectorEmbedding)
-	if err != nil {
-		logging.Warnf("[SelectionFactory] Failed to create MLP selector: %v", err)
-	} else {
-		registry.Register(MethodMLP, mlpAdapter)
-	}
 
 	// Create RL-Driven selector
 	rlDrivenCfg := f.cfg.RLDriven

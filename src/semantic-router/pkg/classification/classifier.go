@@ -39,10 +39,6 @@ type Classifier struct {
 	keywordEmbeddingInitializer EmbeddingClassifierInitializer
 	keywordEmbeddingClassifier  *EmbeddingClassifier
 
-	// Dependencies - MCP-based classifiers
-	mcpCategoryInitializer MCPCategoryInitializer
-	mcpCategoryInference   MCPCategoryInference
-
 	// Hallucination mitigation classifiers
 	factCheckClassifier           *FactCheckClassifier
 	hallucinationDetector         *HallucinationDetector

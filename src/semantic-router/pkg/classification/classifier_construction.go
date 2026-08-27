@@ -46,7 +46,6 @@ func (b *classifierOptionBuilder) build(categoryMapping *CategoryMapping) ([]opt
 	}
 	b.options = append(b.options, parallelOptions...)
 	b.addCategoryClassifier(categoryMapping)
-	b.addMCPCategoryClassifier()
 	return b.options, nil
 }
 

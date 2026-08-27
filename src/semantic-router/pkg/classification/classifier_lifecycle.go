@@ -136,7 +136,7 @@ func (c *Classifier) runtimeTasks() []modelruntime.Task {
 		})
 	}
 
-	appendTask("classifier.category", false, c.usesRoutingSignalType(config.SignalTypeDomain) && (c.IsCategoryEnabled() || c.IsMCPCategoryEnabled()), c.initializeConfiguredCategoryRuntime)
+	appendTask("classifier.category", false, c.usesRoutingSignalType(config.SignalTypeDomain) && c.IsCategoryEnabled(), c.initializeConfiguredCategoryRuntime)
 	appendTask("classifier.jailbreak", false, c.usesRoutingSignalType(config.SignalTypeJailbreak) && c.IsJailbreakEnabled(), c.initializeJailbreakClassifier)
 	appendTask("classifier.pii", false, c.usesRoutingSignalType(config.SignalTypePII) && c.IsPIIEnabled(), c.initializePIIClassifier)
 	appendTask("classifier.keyword_embedding", false, c.IsKeywordEmbeddingClassifierEnabled(), c.initializeKeywordEmbeddingClassifier)
@@ -162,9 +162,6 @@ func (c *Classifier) ownsDefaultAPIConsumer() bool {
 func (c *Classifier) initializeConfiguredCategoryRuntime() error {
 	if c.IsCategoryEnabled() {
 		return c.initializeCategoryClassifier()
-	}
-	if c.IsMCPCategoryEnabled() {
-		return c.initializeMCPCategoryClassifier()
 	}
 	return nil
 }
