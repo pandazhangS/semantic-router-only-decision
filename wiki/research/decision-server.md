@@ -128,7 +128,8 @@ EMBEDDING_API_KEY=xxx ./decision-server -config config/decision-server.yaml -lis
 
 - `endpoint.dimensions` 与 `embedding_config.target_dimension` 必须一致（代码硬校验）
 - keyword 信号用 `method: regex`（纯 Go）；`bm25/ngram` 方法需要 nlp-binding（Rust），本服务保留支持但需 Ubuntu 编译
-- domain/PII/jailbreak 等分类器信号需要本地 mmbert 模型（candle-binding），远程模式下不配置对应模型即可跳过
+- **embedding 信号（`routing.signals.embeddings`）评估走本地 mmBERT 模型（candle-binding）**，远程 embedding 只用于 selection 算法（router_dc/hybrid 等）的 query 向量。无本地模型时配置示例只用 keyword 信号
+- domain/PII/jailbreak 等分类器信号需要本地 mmBERT 模型（candle-binding），远程模式下不配置对应模型即可跳过
 
 ## 5. Higress 集成示例
 
@@ -141,19 +142,34 @@ Higress 侧用 WASM 插件或自定义 filter 调用决策服务，按 `model_id
 
 ## 6. Ubuntu 验证步骤
 
+已在 Ubuntu 24.04 测试机验证通过（2026-08-27）：
+
 ```bash
-# 1. 安装依赖
-apt install -y build-essential rustc cargo
-# 2. 编译 Rust bindings（candle-binding / nlp-binding / ml-binding 已从 import 图移除 ml-binding）
-cd candle-binding && cargo build --release
+# 1. 安装依赖（国内镜像）
+#    go: https://golang.google.cn/dl/go1.25.0.linux-amd64.tar.gz → ~/go-sdk
+#    rust: RUSTUP_DIST_SERVER=https://rsproxy.cn rustup-init.sh -y
+#    cargo 镜像: ~/.cargo/config.toml → sparse+https://rsproxy.cn/index/
+#    GOPROXY=https://goproxy.cn,direct
+# 2. 编译 Rust bindings（candle 需 --no-default-features 禁用 CUDA）
+cd candle-binding && cargo build --release --no-default-features
 cd ../nlp-binding && cargo build --release
 # 3. 编译服务
 cd ../src/semantic-router && go build ./...
-# 4. 启动 + 冒烟测试
-EMBEDDING_API_KEY=xxx ./decision-server -config ../../config/decision-server.yaml
+# 4. 启动（需 LD_LIBRARY_PATH 指向 .so）
+LD_LIBRARY_PATH=.../candle-binding/target/release:.../nlp-binding/target/release \
+  ./decision-server -config config/decision-server.yaml -listen :8080
+# 5. 冒烟测试
 curl -s localhost:8080/health
 curl -s -X POST localhost:8080/v1/decide -d '{"text":"Debug this Python stack trace"}'
 ```
+
+实测结果（keyword 信号）：
+
+| 输入 | 输出 |
+| --- | --- |
+| "Debug this Python stack trace..." | `code_general` → `qwen/qwen3.5-rocm` |
+| "Prove the theorem rigorously from first principles" | `reasoning_deep` → `google/gemini-3.1-pro`（model_list 2 候选） |
+| "hello world" | `default` 兜底 → `qwen/qwen3.5-rocm` |
 
 ## 7. 裁剪范围
 
