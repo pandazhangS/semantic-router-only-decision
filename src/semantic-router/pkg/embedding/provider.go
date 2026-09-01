@@ -45,6 +45,8 @@ func NewProvider(models config.EmbeddingModels, options ProviderOptions) (Provid
 	switch backend {
 	case config.EmbeddingBackendOpenAICompatible:
 		return NewOpenAICompatibleProvider(openAICompatibleConfigFromModels(models, options.HTTPClient))
+	case config.EmbeddingBackendCandle:
+		return nil, fmt.Errorf("built-in embedding backend %q has been removed from this build; configure backend: %q", backend, config.EmbeddingBackendOpenAICompatible)
 	default:
 		return nil, fmt.Errorf("unsupported embedding backend %q", backend)
 	}

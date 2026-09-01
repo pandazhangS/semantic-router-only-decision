@@ -19,7 +19,6 @@ import (
 	"syscall"
 	"time"
 
-	candle_binding "github.com/vllm-project/semantic-router/candle-binding"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/classification"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/embedding"
@@ -252,9 +251,9 @@ func buildHybridSelectionConfig(cfg *config.RouterConfig) *selection.HybridConfi
 }
 
 // resolveSelectionEmbeddingFunc returns the embedding function used by
-// selectors that need query embeddings (router_dc, hybrid, ...). Remote
-// OpenAI-compatible endpoints are preferred; the candle backend is used when
-// no remote endpoint is configured.
+// selectors that need query embeddings (router_dc, hybrid, ...). Vectors
+// always come from the remote OpenAI-compatible endpoint; the built-in
+// candle embedding backend has been removed from this build.
 func resolveSelectionEmbeddingFunc(cfg *config.RouterConfig) (func(string, selection.EmbeddingConfig) ([]float32, error), selection.EmbeddingConfig) {
 	models := cfg.EmbeddingModels
 	backend := embedding.BackendOverrideFromEnv()
@@ -279,18 +278,7 @@ func resolveSelectionEmbeddingFunc(cfg *config.RouterConfig) (func(string, selec
 			}
 			return remoteProvider.Embed(context.Background(), text)
 		default:
-			if embeddingConfig.ModelType == config.EmbeddingModelTypeQwen3 {
-				output, err := candle_binding.GetEmbeddingBatched(text, embeddingConfig.ModelType, embeddingConfig.TargetDimension)
-				if err != nil {
-					return nil, err
-				}
-				return output.Embedding, nil
-			}
-			output, err := candle_binding.GetEmbeddingWithModelType(text, embeddingConfig.ModelType, embeddingConfig.TargetDimension)
-			if err != nil {
-				return nil, err
-			}
-			return output.Embedding, nil
+			return nil, fmt.Errorf("built-in embedding backend %q has been removed from this build; configure backend: %q", backend, config.EmbeddingBackendOpenAICompatible)
 		}
 	}, defaultConfig
 }

@@ -95,19 +95,11 @@ func (c *ExternalModelBasedEmbeddingInitializer) Init(qwen3ModelPath string, gem
 		})
 		return nil
 	case "candle":
-		err := candle_binding.InitEmbeddingModels(qwen3ModelPath, gemmaModelPath, mmBertModelPath, useCPU)
-		if err != nil {
-			return err
-		}
-		logging.ComponentEvent("classifier", "keyword_embedding_backend_initialized", map[string]interface{}{
-			"backend":           "candle",
-			"qwen3_model_ref":   qwen3ModelPath,
-			"gemma_model_ref":   gemmaModelPath,
-			"mmbert_model_ref":  mmBertModelPath,
-			"use_cpu":           useCPU,
-			"mmbert_2d_enabled": mmBertModelPath != "",
-		})
-		return nil
+		// The built-in (candle) embedding backend has been removed from this
+		// build: embedding vectors always come from the openai_compatible
+		// endpoint. Failing fast here replaces the old local-model
+		// FileNotFound crash mode with an explicit configuration error.
+		return fmt.Errorf("built-in embedding backend %q has been removed from this build; configure backend: %q for the semantic embedding", backend, config.EmbeddingBackendOpenAICompatible)
 	default:
 		return fmt.Errorf("unsupported embedding backend %q", backend)
 	}
