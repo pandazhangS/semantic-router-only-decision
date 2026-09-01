@@ -584,6 +584,22 @@ const (
 	NLIError         NLILabel = -1
 )
 
+// String returns the NLI label name.
+func (l NLILabel) String() string {
+	switch l {
+	case NLIEntailment:
+		return "ENTAILMENT"
+	case NLINeutral:
+		return "NEUTRAL"
+	case NLIContradiction:
+		return "CONTRADICTION"
+	case NLIUnknown:
+		return "UNKNOWN"
+	default:
+		return "ERROR"
+	}
+}
+
 // InitHallucinationModel initializes the hallucination model
 func InitHallucinationModel(modelPath string, useCPU bool) error {
 	return ErrBackendUnavailable
@@ -602,8 +618,8 @@ func InitFactCheckClassifier(modelPath string, useCPU bool) error {
 }
 
 // ClassifyFactCheckText classifies text for fact checking
-func ClassifyFactCheckText(text string) (FactCheckResult, error) {
-	return FactCheckResult{}, ErrBackendUnavailable
+func ClassifyFactCheckText(text string) (ClassResult, error) {
+	return ClassResult{}, ErrBackendUnavailable
 }
 
 // FeedbackResult represents the result of feedback detection
@@ -619,13 +635,27 @@ func InitFeedbackDetector(modelPath string, useCPU bool) error {
 }
 
 // ClassifyFeedbackText classifies feedback text
-func ClassifyFeedbackText(text string) (FeedbackResult, error) {
-	return FeedbackResult{}, ErrBackendUnavailable
+func ClassifyFeedbackText(text string) (ClassResult, error) {
+	return ClassResult{}, ErrBackendUnavailable
 }
 
 // DetectHallucinations detects hallucinations
-func DetectHallucinations(text, context, modelPath string, threshold float32) (HallucinationResult, error) {
-	return HallucinationResult{}, ErrBackendUnavailable
+func DetectHallucinations(context, question, answer string, threshold float32) (*HallucinationDetectionResult, error) {
+	return nil, ErrBackendUnavailable
+}
+
+// HallucinationDetectionResult represents the result of hallucination detection
+type HallucinationDetectionResult struct {
+	HasHallucination bool
+	Confidence       float32
+	Spans            []HallucinationSpan
+}
+
+// EnhancedHallucinationDetectionResult represents hallucination detection with NLI explanations
+type EnhancedHallucinationDetectionResult struct {
+	HasHallucination bool
+	Confidence       float32
+	Spans            []EnhancedHallucinationSpan
 }
 
 // InitNLIModel initializes NLI model
@@ -649,8 +679,8 @@ func ClassifyNLI(premise, hypothesis string) (NLIResult, error) {
 }
 
 // DetectHallucinationsWithNLI detects hallucinations using NLI
-func DetectHallucinationsWithNLI(text, context, modelPath string, threshold float32) (HallucinationResult, error) {
-	return HallucinationResult{}, ErrBackendUnavailable
+func DetectHallucinationsWithNLI(context, question, answer string, threshold float32) (*EnhancedHallucinationDetectionResult, error) {
+	return nil, ErrBackendUnavailable
 }
 
 // HallucinationResult represents the result of hallucination detection
@@ -660,8 +690,17 @@ type HallucinationResult struct {
 	Spans            []HallucinationSpan
 }
 
-// HallucinationSpan represents a detected hallucination span
+// HallucinationSpan represents a detected hallucinated span
 type HallucinationSpan struct {
+	Text       string
+	Start      int
+	End        int
+	Confidence float32
+	Label      string
+}
+
+// EnhancedHallucinationSpan represents a hallucinated span with NLI explanation
+type EnhancedHallucinationSpan struct {
 	Text                    string
 	Start                   int
 	End                     int
@@ -671,4 +710,16 @@ type HallucinationSpan struct {
 	NLIConfidence           float32
 	Severity                int
 	Explanation             string
+}
+
+// ModalityResult represents a modality classification result
+type ModalityResult struct {
+	Modality   string
+	ClassID    int
+	Confidence float32
+}
+
+// ClassifyMmBert32KModality classifies prompt intent into response modality
+func ClassifyMmBert32KModality(text string) (ModalityResult, error) {
+	return ModalityResult{}, ErrBackendUnavailable
 }
