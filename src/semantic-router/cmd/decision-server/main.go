@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -24,6 +25,12 @@ import (
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/selection"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/services"
 )
+
+// apiGuide is the operations guide (routing API, external embedding setup,
+// threshold tuning) bundled into the binary and served at GET /docs.
+//
+//go:embed api_guide.md
+var apiGuide string
 
 // router holds the decision-core components. It is the trimmed equivalent of
 // the full router's component graph: classifier (signal evaluation + decision
@@ -49,6 +56,7 @@ func main() {
 	mux.HandleFunc("POST /v1/decide", handleDecide(r.classificationSvc))
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /ready", handleReady)
+	mux.HandleFunc("GET /docs", handleDocs)
 
 	server := &http.Server{
 		Addr:              *listenAddr,
@@ -320,6 +328,11 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 
 func handleReady(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+}
+
+func handleDocs(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	_, _ = w.Write([]byte(apiGuide))
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
