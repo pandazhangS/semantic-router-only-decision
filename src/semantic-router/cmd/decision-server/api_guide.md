@@ -171,6 +171,7 @@ global:
           timeout_seconds: 5
           max_retries: 2
           dimensions: 1024
+          encoding_format: base64   # 可选;响应约 1/4 体积并跳过浮点文本解析,服务端忽略该参数时自动回落浮点数组
 ```
 
 ### 3.2 端点契约
@@ -292,18 +293,19 @@ docker run -p 8080:8080 -e EMBEDDING_API_KEY=xxx \
 
 ## 6. 性能参考(k3s 单副本,loadgen c=8/60s,NodePort)
 
-| 指标 | keyword 基线 | 外部嵌入(mock,0ms) | 外部嵌入(mock,70ms,典型) | 外部嵌入(mock,100ms) | 内置 Qwen3-0.6B(CPU) |
-| --- | --- | --- | --- | --- | --- |
-| ready 时间 | ~1.7s | <1s | <1s | <1s | ~5s(含模型加载) |
-| 内存 RSS | 14Mi | 21Mi | ~21Mi | ~21Mi | ~2.5GB |
-| CPU @c8 | 5.3 核 | ~11.8 核 | — | — | ~11.4 核 |
-| RPS | 14,573 | 1,681 | 111.2 | 78.4 | 15.5 |
-| 延迟 p50 | 0.50ms | 3.09ms | 71.8ms | 101.8ms | 509ms |
-| 延迟 p99 | 1.51ms | 19.5ms | 74.2ms | 104.4ms | 718ms |
+| 指标 | keyword 基线 | 外部嵌入(70ms 典型) | 内置 Qwen3-0.6B(RAYON=8) |
+| --- | --- | --- | --- |
+| ready 时间 | ~1.7s | <1s | ~5s(含模型加载) |
+| 内存 RSS | 14Mi | ~15Mi | ~2.5GB |
+| CPU 稳态 | 5.3 核 @14,573 RPS | 0.07 核 @c=8 / 0.23 核 @c=32 | 8.3 核 |
+| RPS | 14,573 | 111 @c=8 / 445 @c=32 | 17.6 |
+| 延迟 p50 | 0.50ms | 71.8ms | 449ms |
+| 延迟 p99 | 1.51ms | 73.3ms | 557ms |
 
-- 外部嵌入模式的吞吐上限 ≈ `并发数 / (嵌入延迟 + 本决策开销)`:c=8 时实测 0ms→1681、70ms→111、100ms→78,与公式吻合;端到端延迟由嵌入服务主导(mock 自身 0.02~2ms,典型嵌入后端 70ms 左右)
-- 内置模式单请求 CPU 推理 100~230ms,8 并发下线程争用推高 p50 到 ~500ms;提高吞吐需横向扩副本
+- 外部嵌入模式吞吐 ≈ `并发 / 嵌入延迟`;端到端延迟由嵌入服务决定;服务自身 CPU ≈ RPS × 0.42ms(base64 后)
+- 内置模式单请求 CPU 推理 100~230ms,8 并发下线程争用推高 p50 到 ~450ms;提高吞吐需横向扩副本
 - keyword 模式适合与 embedding 混布:确定词先短路,降低嵌入调用比例
+- 镜像 447MB(单 cgo 镜像,keyword/远程嵌入配置共用);内置嵌入模式已移除(见 §8)
 
 ---
 
@@ -320,12 +322,16 @@ go tool pprof -top -nodecount=25 'http://<svc>/debug/pprof/profile?seconds=30'
 go tool pprof -top -inuse_space 'http://<svc>/debug/pprof/heap'
 ```
 
-### 7.2 已修复:远程嵌入连接池(2026-09-01)
+### 7.2 已验证的优化
 
-默认 `http.Transport` 的 `MaxIdleConnsPerHost=2` 导致并发下大多数请求重新 dial + DNS
-(pprof 实测 91.7% CPU 在连接建立)。已为 `openai_compatible` provider 内建连接池
-(`MaxIdleConnsPerHost=100`):**RPS ×2.9,p99 −81%,CPU/请求 −74%**。详见
-`wiki/research/decision-server-optimization.md`。自建 provider 注入 `HTTPClient` 时同理。
+- **远程嵌入连接池(2026-09-01)**:默认 `http.Transport` 的 `MaxIdleConnsPerHost=2`
+  导致并发下大多数请求重新 dial+DNS(pprof 实测 91.7% CPU 在连接建立)。已为
+  `openai_compatible` provider 内建连接池(`MaxIdleConnsPerHost=100`):真实 70ms 场景
+  CPU/req 7.0→0.50ms(−93%);饱和探测下 RPS ×2.9、p99 −81%
+- **`encoding_format: base64`(2026-09-01)**:端点按 OpenAI 协议标准返回 LE float32
+  二进制,响应 21KB→~5.5KB,跳过浮点文本解析。饱和探测 RPS +13%、CPU/req −15%;
+  服务端忽略该参数时自动回落浮点数组,兼容非标准实现;示例配置已默认启用
+- 详见 `wiki/research/decision-server-optimization.md`;自建 provider 注入 `HTTPClient` 时同理
 
 ### 7.3 内置模式的 CPU 旋钮:RAYON_NUM_THREADS
 
@@ -342,51 +348,45 @@ candle 推理走 Rust rayon **进程级全局**线程池,默认 worker 数 = 全
 选型:worker ≈ 常态并发 × 单请求可占核数,与部署 CPU 配额对齐。rayon 池是**进程级全局**的,
 `RAYON_NUM_THREADS` 是延迟↔CPU 的直接权衡旋钮;容器建议同时把 `GOMAXPROCS` 与 CPU limit 对齐。
 
-### 7.4 GOMAXPROCS 实测曲线(远程嵌入 mock 0ms,c=8)
+### 7.4 GOMAXPROCS:跟随 pod CPU limit
 
-| GOMAXPROCS | RPS | p50 | p99 | CPU |
-| --- | --- | --- | --- | --- |
-| 1 | 2,808 | 2.37ms | 6.61ms | ~1.0 核 |
-| **4** | **6,429** | **1.09ms** | **3.17ms** | **3.1 核** |
-| 8 | 4,836 | 1.55ms | 3.58ms | 4.2 核 |
-| 默认(=宿主核数 16) | 4,906 | 1.55ms | 3.54ms | 4.6 核 |
-
-要点:
-
-- **两个极端都次优,匹配实际负载的中间值最优**:宿主核数默认比 GOMAXPROCS=4 少 31% 吞吐、
-  多 48% CPU(16 个 P 对 ~3 核需求是纯开销);单线程损失 42% 吞吐(每请求 ~1ms 真实 CPU 工作,
-  单 P 封顶并行度)
+- **延迟主导场景(典型,≥50ms 嵌入)完全不敏感**:70ms 嵌入下 GOMAXPROCS=1/4/宿主默认
+  全部 111 RPS,CPU 0.06~0.075 核——I/O 等待不占 CPU,调它没有意义
+- 高 RPS 场景(低延迟后端/0ms 饱和探测)超配有代价:16 P(宿主 16 核默认)vs 4 P,
+  总 CPU 4.32→3.12 核,GC 标记占比 12.3%→4.4%——超配的 P 是 GC 并行标记与调度同步的放大器
 - `GOMAXPROCS=1` 对 candle 模式毫无影响(推理走 rayon 原生线程池,不经 Go 调度器)
-- 延迟主导场景(如 70ms 嵌入)下 GOMAXPROCS 不敏感(CPU 需求仅 ~0.06 核)
 - 生产:GOMAXPROCS 跟随 pod CPU limit(automaxprocs),不是宿主核数;失配会触发 CFS throttling
-- 开销机制:P 数超过实际 CPU 需求时,GC 并行标记与调度同步成为净开销
-  (实测 =16 时 GC 标记占总 CPU 12.3%,=4 时 4.4%)
 
 ### 7.5 吞吐量纲速查
 
-- 远程嵌入:吞吐上限 ≈ `并发 × 1/嵌入延迟`;路由服务自身 ~1ms CPU/req(修复后),水平扩副本线性扩展
+- 远程嵌入:吞吐 ≈ `并发 / 嵌入延迟`;路由服务自身 ~0.42ms CPU/req(base64 后),水平扩副本线性扩展
 - 内置嵌入:CPU/req 随线程数与模型大小变化,常驻内存 ~2.5GB(Qwen3-0.6B)
 - keyword:0.36ms CPU/req,无优化必要
 
-### 7.6 资源水位与 limit/request(cgroup v2 实测,GOMAXPROCS=4)
+### 7.6 资源水位与 limit/request(cgroup v2 实测,70ms 典型)
 
 | 水位 | 场景 | RPS | CPU | 内存 |
 | --- | --- | --- | --- | --- |
 | 空闲 | 无流量 | 0 | 0.001 核 | RSS 8Mi |
-| 常态 | 70ms 嵌入延迟,c=8 | 111 | 0.075 核 | RSS ~15Mi |
-| 高压 | 0ms 嵌入,c=8 | ~6,500 | 3.28 核 | RSS 14.4Mi |
-| 饱和 | 0ms 嵌入,c=32 | 7,483 | 3.55 核(封顶) | peak 19.8Mi,p99 12.7ms |
+| 典型 | 70ms 嵌入延迟,c=8 | 111 | 0.075 核 | RSS ~15Mi |
+| 扩展 | 70ms 嵌入延迟,c=32 | 445 | 0.23 核 | RSS ~15Mi |
+| 饱和上限探测 | 0ms mock 压满 CPU 路径,c=32 | 8,757 | 3.32 核(GOMAXPROCS=4 封顶) | peak 19.8Mi |
 
-- 容量公式:CPU ≈ RPS × 0.5ms;嵌入延迟主导(≥50ms)时单副本 CPU 需求通常 <0.1 核
+- 容量公式:CPU ≈ RPS × 0.42ms;单副本吞吐 ≈ 并发 / 嵌入延迟;
+  嵌入延迟主导(≥50ms)时单副本 CPU 需求通常 <0.25 核
 - 建议:request `cpu 250m / memory 64Mi`,limit `cpu 4 / memory 256Mi`;
   limit cpu 与 GOMAXPROCS 对齐(GOMAXPROCS ≤ limit,避免 CFS throttling 抬延迟)
 
 ---
 
-## 8. 二开:不用内嵌模型时裁剪 cgo
+## 8. 内置嵌入后端已移除(cgo 保留)
 
-只保留 **远程嵌入 + keyword(regex)+ 静态选择** 的部署,可以把 candle-binding / nlp-binding
-两个 Rust cgo 依赖整体从构建链里拿掉——**无需删除任何调用点代码**。
+本分支保留 cgo 构建(单镜像,Rust .so 随镜像分发):mmBERT 分类器信号
+(PII/jailbreak/fact-check/feedback/modality)、bm25/ngram keyword、多模态图像嵌入
+能力不变。**已移除的是内置文本嵌入后端**:backend: candle / openvino 的语义嵌入
+路径不复存在,embedding 信号与 selection 算法的向量一律来自 openai_compatible
+远程端点;误配 backend: candle 启动即失败并给出明确错误(取代旧的本地模型
+FileNotFound 崩溃),部署不再需要 qwen3/mmbert 本地模型文件与 hostPath 挂载。
 
 ### 8.1 原理:binding 自带纯 Go 编译桩
 
@@ -400,41 +400,25 @@ candle 推理走 Rust rayon **进程级全局**线程池,默认 worker 数 = 全
 
 ### 8.2 裁剪后的能力边界
 
-| 能力 | cgo 构建 | CGO_ENABLED=0 |
+| 能力 | 上游 cgo 构建 | 本地 CGO_ENABLED=0 构建 |
 | --- | --- | --- |
 | 远程嵌入信号(openai_compatible) | ✓ | ✓ |
 | keyword 信号 `method: regex` | ✓ | ✓ |
 | 静态/elo 等非 ML 模型选择 | ✓ | ✓ |
-| 内置嵌入(candle 后端) | ✓ | ✗(backend 返回错误) |
+| 内置文本嵌入(candle/openvino 后端) | ✗(已移除) | ✗(已移除) |
 | mmBERT 分类器信号(domain/PII/jailbreak 等) | ✓ | ✗ |
 | keyword `method: bm25/ngram` | ✓ | ✗ |
 | 多模态图像嵌入 / NLI | ✓ | ✗ |
 
-### 8.3 构建差异
+### 8.3 构建
 
 ```bash
-# 本地
-cd src/semantic-router && CGO_ENABLED=0 go build -o decision-server ./cmd/decision-server
+# 单一 cgo 镜像(Rust 编译 .so + golang:1.27 编译 Go)
+docker build -t decision-server:latest .
 ```
 
-Dockerfile 简化(删 Rust stage 与 .so 拷贝):
-
-```dockerfile
-FROM golang:1.25-bookworm AS build
-ENV CGO_ENABLED=0 GOPROXY=https://goproxy.cn,direct
-WORKDIR /src
-COPY . .
-RUN cd src/semantic-router && go build -o /out/decision-server ./cmd/decision-server
-
-FROM debian:bookworm-slim
-COPY --from=build /out/decision-server /usr/local/bin/decision-server
-COPY config/decision-server.yaml /etc/decision-server/config.yaml
-EXPOSE 8080
-ENTRYPOINT ["decision-server"]
-```
-
-收益:构建不再需要 Rust 工具链(阶段 1 整体去掉,CI 时间大幅缩短)、镜像更小、
-二进制静态可移植、无 `.so` 加载面。
+本地开发可 `CGO_ENABLED=0 go build ./cmd/decision-server` 快速编译(纯 Go 桩,
+无 .so 依赖;bm25/ngram、分类器、多模态调用返回 unavailable)。
 
 ### 8.4 验证清单
 
