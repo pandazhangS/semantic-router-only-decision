@@ -184,3 +184,6 @@ model_catalog:
         timeout_seconds: 5
         max_retries: 2
         dimensions: 1024
+        # base64 让端点返回 little-endian float32 二进制(OpenAI 协议标准),
+        # 避免逐个解析 1024 维浮点文本;端点忽略该参数时自动回落浮点数组
+        encoding_format: base64

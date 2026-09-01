@@ -35,7 +35,7 @@ RUN cargo build --release --no-default-features --manifest-path candle-binding/C
 RUN cargo build --release --manifest-path nlp-binding/Cargo.toml
 
 # ---------- Stage 2: Go 编译 ----------
-FROM golang:1.25-bookworm AS build
+FROM golang:1.27.0-bookworm AS build
 ENV GOPROXY=https://goproxy.cn,direct \
     CGO_ENABLED=1
 WORKDIR /src

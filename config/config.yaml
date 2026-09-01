@@ -2149,6 +2149,7 @@ global:
           timeout_seconds: 5
           max_retries: 2
           dimensions: 1024
+          encoding_format: base64
     system:
       prompt_guard: models/mmbert32k-jailbreak-detector-merged
       domain_classifier: models/mmbert32k-intent-classifier-merged
