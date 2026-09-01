@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	npprof "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -45,6 +46,7 @@ type router struct {
 func main() {
 	configPath := flag.String("config", "config.yaml", "path to the router config file")
 	listenAddr := flag.String("listen", ":8080", "HTTP listen address")
+	enablePprof := flag.Bool("pprof", false, "expose /debug/pprof endpoints for CPU/heap profiling")
 	flag.Parse()
 
 	r, err := buildRouter(*configPath)
@@ -57,6 +59,14 @@ func main() {
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("GET /ready", handleReady)
 	mux.HandleFunc("GET /docs", handleDocs)
+	if *enablePprof {
+		mux.HandleFunc("GET /debug/pprof/", npprof.Index)
+		mux.HandleFunc("GET /debug/pprof/cmdline", npprof.Cmdline)
+		mux.HandleFunc("GET /debug/pprof/profile", npprof.Profile)
+		mux.HandleFunc("GET /debug/pprof/symbol", npprof.Symbol)
+		mux.HandleFunc("GET /debug/pprof/trace", npprof.Trace)
+		log.Printf("pprof endpoints enabled at /debug/pprof/")
+	}
 
 	server := &http.Server{
 		Addr:              *listenAddr,

@@ -91,7 +91,24 @@ func NewOpenAICompatibleProvider(cfg OpenAICompatibleConfig) (*OpenAICompatibleP
 	timeout := time.Duration(timeoutSeconds) * time.Second
 	client := cfg.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: timeout}
+		// The default transport keeps only MaxIdleConnsPerHost=2 idle
+		// connections, so under concurrency most requests pay a fresh TCP
+		// dial plus a DNS lookup per call; profiling showed dialing
+		// dominating CPU. Size the idle pool for the concurrent path.
+		client = &http.Client{
+			Timeout: timeout,
+			Transport: &http.Transport{
+				Proxy: http.ProxyFromEnvironment,
+				DialContext: (&net.Dialer{
+					Timeout:   5 * time.Second,
+					KeepAlive: 30 * time.Second,
+				}).DialContext,
+				MaxIdleConns:        200,
+				MaxIdleConnsPerHost: 100,
+				IdleConnTimeout:     90 * time.Second,
+				TLSHandshakeTimeout: 10 * time.Second,
+			},
+		}
 	} else if client.Timeout == 0 && timeout > 0 {
 		copyClient := *client
 		copyClient.Timeout = timeout

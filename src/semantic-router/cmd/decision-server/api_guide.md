@@ -307,7 +307,137 @@ docker run -p 8080:8080 -e EMBEDDING_API_KEY=xxx \
 
 ---
 
-## 7. 故障排查
+## 7. 性能调优与 pprof
+
+### 7.1 采样工作流
+
+启动时加 `-pprof` 开放采样端点(生产默认关闭):
+
+```bash
+# CPU 火焰定位(压测负载中采样 30s)
+go tool pprof -top -nodecount=25 'http://<svc>/debug/pprof/profile?seconds=30'
+# 堆
+go tool pprof -top -inuse_space 'http://<svc>/debug/pprof/heap'
+```
+
+### 7.2 已修复:远程嵌入连接池(2026-09-01)
+
+默认 `http.Transport` 的 `MaxIdleConnsPerHost=2` 导致并发下大多数请求重新 dial + DNS
+(pprof 实测 91.7% CPU 在连接建立)。已为 `openai_compatible` provider 内建连接池
+(`MaxIdleConnsPerHost=100`):**RPS ×2.9,p99 −81%,CPU/请求 −74%**。详见
+`wiki/research/decision-server-optimization.md`。自建 provider 注入 `HTTPClient` 时同理。
+
+### 7.3 内置模式的 CPU 旋钮:RAYON_NUM_THREADS
+
+candle 推理走 Rust rayon **进程级全局**线程池,默认 worker 数 = 全部核数;并发推理共享争抢,
+上下文切换/缓存失效会放大总工作量(实测 0.73 → 0.47 核·s/req)。实测(c=8):
+
+| RAYON_NUM_THREADS | RPS | p50 | p99 | CPU |
+| --- | --- | --- | --- | --- |
+| 默认(16 核机=16) | 15.5 | 509ms | 718ms | 11.4 核 |
+| 8 | **17.6** | **449ms** | **557ms** | **8.3 核** |
+| 4 | 10.7 | 746ms | 845ms | 4.45 核 |
+| 2 | 5.8 | 1363ms | 1491ms | 2.3 核 |
+
+选型:worker ≈ 常态并发 × 单请求可占核数,与部署 CPU 配额对齐。rayon 池是**进程级全局**的,
+`RAYON_NUM_THREADS` 是延迟↔CPU 的直接权衡旋钮;容器建议同时把 `GOMAXPROCS` 与 CPU limit 对齐。
+
+### 7.4 GOMAXPROCS 实测曲线(远程嵌入 mock 0ms,c=8)
+
+| GOMAXPROCS | RPS | p50 | p99 | CPU |
+| --- | --- | --- | --- | --- |
+| 1 | 2,808 | 2.37ms | 6.61ms | ~1.0 核 |
+| **4** | **6,429** | **1.09ms** | **3.17ms** | **3.1 核** |
+| 8 | 4,836 | 1.55ms | 3.58ms | 4.2 核 |
+| 默认(=宿主核数 16) | 4,906 | 1.55ms | 3.54ms | 4.6 核 |
+
+要点:
+
+- **两个极端都次优,匹配实际负载的中间值最优**:宿主核数默认比 GOMAXPROCS=4 少 31% 吞吐、
+  多 48% CPU(16 个 P 对 ~3 核需求是纯开销);单线程损失 42% 吞吐(每请求 ~1ms 真实 CPU 工作,
+  单 P 封顶并行度)
+- `GOMAXPROCS=1` 对 candle 模式毫无影响(推理走 rayon 原生线程池,不经 Go 调度器)
+- 延迟主导场景(如 70ms 嵌入)下 GOMAXPROCS 不敏感(CPU 需求仅 ~0.06 核)
+- 生产:GOMAXPROCS 跟随 pod CPU limit(automaxprocs),不是宿主核数;失配会触发 CFS throttling
+
+### 7.5 吞吐量纲速查
+
+- 远程嵌入:吞吐上限 ≈ `并发 × 1/嵌入延迟`;路由服务自身 ~1ms CPU/req(修复后),水平扩副本线性扩展
+- 内置嵌入:CPU/req 随线程数与模型大小变化,常驻内存 ~2.5GB(Qwen3-0.6B)
+- keyword:0.36ms CPU/req,无优化必要
+
+---
+
+## 8. 二开:不用内嵌模型时裁剪 cgo
+
+只保留 **远程嵌入 + keyword(regex)+ 静态选择** 的部署,可以把 candle-binding / nlp-binding
+两个 Rust cgo 依赖整体从构建链里拿掉——**无需删除任何调用点代码**。
+
+### 8.1 原理:binding 自带纯 Go 编译桩
+
+两个 binding 均内置 `windows || !cgo` 编译桩:
+
+- `candle-binding/semantic-router_mock.go`
+- `nlp-binding/nlp_binding_mock.go`
+
+`CGO_ENABLED=0` 时 Go 自动选择桩实现(所有 FFI 函数返回 `ErrBackendUnavailable`),
+`go build` 直接通过,二进制不含 cgo、不需要任何 `.so`。
+
+### 8.2 裁剪后的能力边界
+
+| 能力 | cgo 构建 | CGO_ENABLED=0 |
+| --- | --- | --- |
+| 远程嵌入信号(openai_compatible) | ✓ | ✓ |
+| keyword 信号 `method: regex` | ✓ | ✓ |
+| 静态/elo 等非 ML 模型选择 | ✓ | ✓ |
+| 内置嵌入(candle 后端) | ✓ | ✗(backend 返回错误) |
+| mmBERT 分类器信号(domain/PII/jailbreak 等) | ✓ | ✗ |
+| keyword `method: bm25/ngram` | ✓ | ✗ |
+| 多模态图像嵌入 / NLI | ✓ | ✗ |
+
+### 8.3 构建差异
+
+```bash
+# 本地
+cd src/semantic-router && CGO_ENABLED=0 go build -o decision-server ./cmd/decision-server
+```
+
+Dockerfile 简化(删 Rust stage 与 .so 拷贝):
+
+```dockerfile
+FROM golang:1.25-bookworm AS build
+ENV CGO_ENABLED=0 GOPROXY=https://goproxy.cn,direct
+WORKDIR /src
+COPY . .
+RUN cd src/semantic-router && go build -o /out/decision-server ./cmd/decision-server
+
+FROM debian:bookworm-slim
+COPY --from=build /out/decision-server /usr/local/bin/decision-server
+COPY config/decision-server.yaml /etc/decision-server/config.yaml
+EXPOSE 8080
+ENTRYPOINT ["decision-server"]
+```
+
+收益:构建不再需要 Rust 工具链(阶段 1 整体去掉,CI 时间大幅缩短)、镜像更小、
+二进制静态可移植、无 `.so` 加载面。
+
+### 8.4 验证清单
+
+1. 启动后 `GET /ready` 正常(远程 backend 启动本就跳过本地模型加载)
+2. embedding 信号命中正常(`matched_rules` 带 `embedding:` 前缀)
+3. keyword 正则命中正常;若配置了 `bm25/ngram` 会显式报错(桩返回错误),属预期
+4. 错误信息形如 "candle backend unavailable",用于发现误配置了 `backend: candle`
+
+### 8.5 进一步瘦身(激进,可选)
+
+若连桩代码也不想要:删掉 `candle-binding/`、`nlp-binding/` 两个 module,并替换上文中
+19 个调用点文件(`pkg/classification/*.go` 为主,加 `cmd/decision-server/main.go`、
+`pkg/modelruntime/router_runtime.go`)里的直接调用为本地接口。**不推荐**——桩方案零维护,
+收益只剩几 MB 源码;调用点手术的 review 成本远高于此。
+
+---
+
+## 9. 故障排查
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
