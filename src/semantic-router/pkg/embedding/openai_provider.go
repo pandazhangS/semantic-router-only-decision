@@ -3,10 +3,13 @@ package embedding
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,6 +25,8 @@ const (
 	defaultTimeoutSeconds = 10
 	baseRetryDelay        = 50 * time.Millisecond
 	maxRetryDelay         = 500 * time.Millisecond
+	// Base64 embeddings decode to packed little-endian float32 values.
+	float32EncodedBytes = 4
 )
 
 type OpenAICompatibleConfig struct {
@@ -31,6 +36,7 @@ type OpenAICompatibleConfig struct {
 	TimeoutSeconds    int
 	MaxRetries        int
 	Dimensions        int
+	EncodingFormat    string
 	ExpectedDimension int
 	HTTPClient        *http.Client
 }
@@ -42,14 +48,16 @@ type OpenAICompatibleProvider struct {
 	timeout           time.Duration
 	maxRetries        int
 	dimensions        int
+	encodingFormat    string
 	expectedDimension int
 	client            *http.Client
 }
 
 type embeddingsRequest struct {
-	Model      string   `json:"model"`
-	Input      []string `json:"input"`
-	Dimensions int      `json:"dimensions,omitempty"`
+	Model          string   `json:"model"`
+	Input          []string `json:"input"`
+	Dimensions     int      `json:"dimensions,omitempty"`
+	EncodingFormat string   `json:"encoding_format,omitempty"`
 }
 
 type embeddingsResponse struct {
@@ -58,8 +66,8 @@ type embeddingsResponse struct {
 }
 
 type embeddingDatum struct {
-	Index     int       `json:"index"`
-	Embedding []float64 `json:"embedding"`
+	Index     int             `json:"index"`
+	Embedding json.RawMessage `json:"embedding"`
 }
 
 type providerError struct {
@@ -82,6 +90,15 @@ func NewOpenAICompatibleProvider(cfg OpenAICompatibleConfig) (*OpenAICompatibleP
 	}
 	if cfg.TimeoutSeconds < 0 {
 		return nil, fmt.Errorf("embedding endpoint timeout_seconds must be non-negative")
+	}
+	encodingFormat := strings.ToLower(strings.TrimSpace(cfg.EncodingFormat))
+	switch encodingFormat {
+	case "", config.EmbeddingEncodingFormatFloat:
+		encodingFormat = ""
+	case config.EmbeddingEncodingFormatBase64:
+	default:
+		return nil, fmt.Errorf("embedding endpoint encoding_format %q is not supported (use %q or %q)",
+			cfg.EncodingFormat, config.EmbeddingEncodingFormatFloat, config.EmbeddingEncodingFormatBase64)
 	}
 
 	timeoutSeconds := cfg.TimeoutSeconds
@@ -122,6 +139,7 @@ func NewOpenAICompatibleProvider(cfg OpenAICompatibleConfig) (*OpenAICompatibleP
 		timeout:           timeout,
 		maxRetries:        max(0, cfg.MaxRetries),
 		dimensions:        cfg.Dimensions,
+		encodingFormat:    encodingFormat,
 		expectedDimension: cfg.ExpectedDimension,
 		client:            client,
 	}, nil
@@ -193,7 +211,7 @@ func (p *OpenAICompatibleProvider) Backend() string {
 }
 
 func (p *OpenAICompatibleProvider) embedBatchOnce(ctx context.Context, texts []string, apiKey string) ([][]float32, error) {
-	body, err := json.Marshal(embeddingsRequest{Model: p.model, Input: texts, Dimensions: p.dimensions})
+	body, err := json.Marshal(embeddingsRequest{Model: p.model, Input: texts, Dimensions: p.dimensions, EncodingFormat: p.encodingFormat})
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +268,7 @@ func (p *OpenAICompatibleProvider) parseEmbeddings(data []embeddingDatum, expect
 		if result[index] != nil {
 			return nil, fmt.Errorf("embedding provider returned duplicate embedding index %d", index)
 		}
-		converted, err := p.convertEmbedding(item.Embedding)
+		converted, err := p.decodeEmbedding(item.Embedding)
 		if err != nil {
 			return nil, fmt.Errorf("embedding index %d: %w", index, err)
 		}
@@ -283,6 +301,45 @@ func ensureCompleteEmbeddings(result [][]float32) error {
 		}
 	}
 	return nil
+}
+
+// decodeEmbedding accepts both response shapes allowed by the OpenAI
+// embeddings protocol: a JSON float array, or a base64 string carrying
+// little-endian float32 values (encoding_format "base64"). Servers that
+// ignore the encoding_format parameter keep answering with float arrays,
+// so both shapes must decode here.
+func (p *OpenAICompatibleProvider) decodeEmbedding(raw json.RawMessage) ([]float32, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("empty embedding payload")
+	}
+	if trimmed[0] != '"' {
+		var values []float64
+		if err := json.Unmarshal(trimmed, &values); err != nil {
+			return nil, err
+		}
+		return p.convertEmbedding(values)
+	}
+	var encoded string
+	if err := json.Unmarshal(trimmed, &encoded); err != nil {
+		return nil, err
+	}
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode base64 embedding: %w", err)
+	}
+	if len(decoded)%float32EncodedBytes != 0 {
+		return nil, fmt.Errorf("base64 embedding decodes to %d bytes, not a multiple of %d", len(decoded), float32EncodedBytes)
+	}
+	dimension := len(decoded) / float32EncodedBytes
+	if p.expectedDimension > 0 && dimension != p.expectedDimension {
+		return nil, fmt.Errorf("embedding dimension mismatch: got %d, want %d", dimension, p.expectedDimension)
+	}
+	embedding := make([]float32, dimension)
+	for i := range embedding {
+		embedding[i] = math.Float32frombits(binary.LittleEndian.Uint32(decoded[i*float32EncodedBytes:]))
+	}
+	return embedding, nil
 }
 
 func (p *OpenAICompatibleProvider) convertEmbedding(values []float64) ([]float32, error) {

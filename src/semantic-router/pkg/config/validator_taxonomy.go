@@ -6,6 +6,17 @@ import (
 	"strings"
 )
 
+// isAbsoluteHostPath reports whether path is absolute on any supported host
+// OS. filepath.IsAbs alone lets POSIX-style "/..." paths through on Windows,
+// so read-only validation would accept paths that are absolute on the Linux
+// deployment host.
+func isAbsoluteHostPath(path string) bool {
+	if filepath.IsAbs(path) {
+		return true
+	}
+	return strings.HasPrefix(path, "/") || strings.HasPrefix(path, "\\")
+}
+
 func validateKnowledgeBaseContracts(cfg *RouterConfig) error {
 	referenced := referencedKnowledgeBaseNames(cfg)
 	kbs, definitions, err := knowledgeBaseDefinitions(cfg, referenced)
@@ -124,7 +135,7 @@ func loadKnowledgeBaseDefinitionForValidation(
 		return nil, fmt.Errorf("global.model_catalog.kbs[%q]: threshold must be between 0 and 1", kb.Name)
 	}
 	if cfg.SkipExternalAssetValidation {
-		if filepath.IsAbs(kb.Source.Path) {
+		if isAbsoluteHostPath(kb.Source.Path) {
 			return nil, fmt.Errorf(
 				"global.model_catalog.kbs[%q]: absolute source.path is not allowed in read-only validation",
 				kb.Name,
@@ -132,7 +143,7 @@ func loadKnowledgeBaseDefinitionForValidation(
 		}
 		return nil, nil
 	}
-	if cfg.ConfigBaseDir == "" && !filepath.IsAbs(kb.Source.Path) {
+	if cfg.ConfigBaseDir == "" && !isAbsoluteHostPath(kb.Source.Path) {
 		return nil, nil
 	}
 	if _, isReferenced := referenced[kb.Name]; !isReferenced {

@@ -114,6 +114,7 @@ func openAICompatibleConfigFromModels(models config.EmbeddingModels, client *htt
 		TimeoutSeconds:    models.Endpoint.TimeoutSeconds,
 		MaxRetries:        models.Endpoint.MaxRetries,
 		Dimensions:        models.Endpoint.Dimensions,
+		EncodingFormat:    models.Endpoint.EncodingFormat,
 		ExpectedDimension: expectedDimension,
 		HTTPClient:        client,
 	}

@@ -2,13 +2,18 @@ package embedding
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
 )
 
 func TestOpenAICompatibleProviderEmbedBatch(t *testing.T) {
@@ -180,12 +185,98 @@ func TestOpenAICompatibleProviderDimensionMismatch(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleProviderBase64Encoding(t *testing.T) {
+	var sawEncodingFormat string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req embeddingsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		sawEncodingFormat = req.EncodingFormat
+		writeBase64EmbeddingResponse(t, w, [][]float64{{0.1, 0.2}})
+	}))
+	defer server.Close()
+
+	provider := newTestOpenAIProvider(t, OpenAICompatibleConfig{
+		BaseURL:           server.URL,
+		Model:             "embedding-model",
+		EncodingFormat:    config.EmbeddingEncodingFormatBase64,
+		ExpectedDimension: 2,
+	})
+
+	embedding, err := provider.Embed(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	if sawEncodingFormat != config.EmbeddingEncodingFormatBase64 {
+		t.Fatalf("request encoding_format = %q, want base64", sawEncodingFormat)
+	}
+	if len(embedding) != 2 || embedding[0] != float32(0.1) || embedding[1] != float32(0.2) {
+		t.Fatalf("embedding = %#v, want [0.1 0.2]", embedding)
+	}
+}
+
+func TestOpenAICompatibleProviderDecodesFloatFallback(t *testing.T) {
+	var sawEncodingFormat string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req embeddingsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			return
+		}
+		sawEncodingFormat = req.EncodingFormat
+		// A server that ignores encoding_format keeps answering with float
+		// arrays; the provider must still decode those.
+		writeEmbeddingResponse(t, w, [][]float64{{0.1, 0.2}})
+	}))
+	defer server.Close()
+
+	provider := newTestOpenAIProvider(t, OpenAICompatibleConfig{
+		BaseURL:           server.URL,
+		Model:             "embedding-model",
+		EncodingFormat:    config.EmbeddingEncodingFormatBase64,
+		ExpectedDimension: 2,
+	})
+
+	embedding, err := provider.Embed(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	if sawEncodingFormat != config.EmbeddingEncodingFormatBase64 {
+		t.Fatalf("request encoding_format = %q, want base64", sawEncodingFormat)
+	}
+	if len(embedding) != 2 || embedding[0] != float32(0.1) || embedding[1] != float32(0.2) {
+		t.Fatalf("embedding = %#v, want [0.1 0.2]", embedding)
+	}
+}
+
+func TestOpenAICompatibleProviderBase64DimensionMismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeBase64EmbeddingResponse(t, w, [][]float64{{0.1, 0.2}})
+	}))
+	defer server.Close()
+
+	provider := newTestOpenAIProvider(t, OpenAICompatibleConfig{
+		BaseURL:           server.URL,
+		Model:             "embedding-model",
+		EncodingFormat:    config.EmbeddingEncodingFormatBase64,
+		ExpectedDimension: 3,
+	})
+
+	_, err := provider.Embed(context.Background(), "hello")
+	if err == nil || !strings.Contains(err.Error(), "dimension mismatch") {
+		t.Fatalf("Embed() error = %v, want dimension mismatch", err)
+	}
+}
+
 func TestNewOpenAICompatibleProviderValidatesConfig(t *testing.T) {
 	cases := []OpenAICompatibleConfig{
 		{Model: "embedding-model"},
 		{BaseURL: "localhost:8000", Model: "embedding-model"},
 		{BaseURL: "http://localhost:8000", Dimensions: 2, ExpectedDimension: 3},
 		{BaseURL: "http://localhost:8000"},
+		{BaseURL: "http://localhost:8000", Model: "embedding-model", EncodingFormat: "xml"},
 	}
 	for _, cfg := range cases {
 		if _, err := NewOpenAICompatibleProvider(cfg); err == nil {
@@ -207,7 +298,34 @@ func writeEmbeddingResponse(t *testing.T, w http.ResponseWriter, embeddings [][]
 	t.Helper()
 	data := make([]embeddingDatum, len(embeddings))
 	for i, embedding := range embeddings {
-		data[i] = embeddingDatum{Index: i, Embedding: embedding}
+		raw, err := json.Marshal(embedding)
+		if err != nil {
+			t.Fatalf("marshal embedding: %v", err)
+		}
+		data[i] = embeddingDatum{Index: i, Embedding: raw}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(embeddingsResponse{Data: data}); err != nil {
+		t.Fatalf("encode response: %v", err)
+	}
+}
+
+// writeBase64EmbeddingResponse answers the way OpenAI-compatible servers do
+// for encoding_format "base64": each vector is base64-wrapped little-endian
+// float32.
+func writeBase64EmbeddingResponse(t *testing.T, w http.ResponseWriter, embeddings [][]float64) {
+	t.Helper()
+	data := make([]embeddingDatum, len(embeddings))
+	for i, embedding := range embeddings {
+		le := make([]byte, 4*len(embedding))
+		for j, value := range embedding {
+			binary.LittleEndian.PutUint32(le[j*4:], math.Float32bits(float32(value)))
+		}
+		raw, err := json.Marshal(base64.StdEncoding.EncodeToString(le))
+		if err != nil {
+			t.Fatalf("marshal base64 embedding: %v", err)
+		}
+		data[i] = embeddingDatum{Index: i, Embedding: raw}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(embeddingsResponse{Data: data}); err != nil {

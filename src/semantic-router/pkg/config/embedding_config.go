@@ -11,6 +11,14 @@ const (
 	EmbeddingModelTypeRemote = "remote"
 )
 
+// Embedding encoding formats accepted by OpenAI-compatible endpoints.
+// base64 responses carry little-endian float32 vectors and avoid parsing
+// large float arrays from JSON text.
+const (
+	EmbeddingEncodingFormatFloat  = "float"
+	EmbeddingEncodingFormatBase64 = "base64"
+)
+
 // EmbeddingEndpointConfig defines an external embedding provider endpoint.
 type EmbeddingEndpointConfig struct {
 	BaseURL        string `yaml:"base_url,omitempty"`
@@ -19,6 +27,7 @@ type EmbeddingEndpointConfig struct {
 	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty"`
 	MaxRetries     int    `yaml:"max_retries,omitempty"`
 	Dimensions     int    `yaml:"dimensions,omitempty"`
+	EncodingFormat string `yaml:"encoding_format,omitempty"`
 }
 
 func (e EmbeddingModels) EmbeddingBackend() string {
