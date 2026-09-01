@@ -297,12 +297,12 @@ docker run -p 8080:8080 -e EMBEDDING_API_KEY=xxx \
 | --- | --- | --- | --- |
 | ready 时间 | ~1.7s | <1s | ~5s(含模型加载) |
 | 内存 RSS | 14Mi | ~15Mi | ~2.5GB |
-| CPU 稳态 | 5.3 核 @14,573 RPS | 0.07 核 @c=8 / 0.23 核 @c=32 | 8.3 核 |
+| CPU 稳态 | 5.3 核 @14,573 RPS | 0.05 核 @c=8 / 0.18 核 @c=32(GOMAXPROCS=1) | 8.3 核 |
 | RPS | 14,573 | 111 @c=8 / 445 @c=32 | 17.6 |
 | 延迟 p50 | 0.50ms | 71.8ms | 449ms |
 | 延迟 p99 | 1.51ms | 73.3ms | 557ms |
 
-- 外部嵌入模式吞吐 ≈ `并发 / 嵌入延迟`;端到端延迟由嵌入服务决定;服务自身 CPU ≈ RPS × 0.42ms(base64 后)
+- 外部嵌入模式吞吐 ≈ `并发 / 嵌入延迟`;端到端延迟由嵌入服务决定;服务自身 CPU ≈ RPS × 0.4ms(base64 后,GOMAXPROCS 对齐 limit)
 - 内置模式单请求 CPU 推理 100~230ms,8 并发下线程争用推高 p50 到 ~450ms;提高吞吐需横向扩副本
 - keyword 模式适合与 embedding 混布:确定词先短路,降低嵌入调用比例
 - 镜像 447MB(单 cgo 镜像,keyword/远程嵌入配置共用);内置嵌入模式已移除(见 §8)
@@ -327,9 +327,9 @@ go tool pprof -top -inuse_space 'http://<svc>/debug/pprof/heap'
 - **远程嵌入连接池(2026-09-01)**:默认 `http.Transport` 的 `MaxIdleConnsPerHost=2`
   导致并发下大多数请求重新 dial+DNS(pprof 实测 91.7% CPU 在连接建立)。已为
   `openai_compatible` provider 内建连接池(`MaxIdleConnsPerHost=100`):真实 70ms 场景
-  CPU/req 7.0→0.50ms(−93%);饱和探测下 RPS ×2.9、p99 −81%
+  CPU/req 7.0→0.50ms(−93%)
 - **`encoding_format: base64`(2026-09-01)**:端点按 OpenAI 协议标准返回 LE float32
-  二进制,响应 21KB→~5.5KB,跳过浮点文本解析。饱和探测 RPS +13%、CPU/req −15%;
+  二进制,响应 21KB→~5.5KB,跳过浮点文本解析。服务侧 CPU/req −15%,端到端延迟不变;
   服务端忽略该参数时自动回落浮点数组,兼容非标准实现;示例配置已默认启用
 - 详见 `wiki/research/decision-server-optimization.md`;自建 provider 注入 `HTTPClient` 时同理
 
@@ -348,34 +348,38 @@ candle 推理走 Rust rayon **进程级全局**线程池,默认 worker 数 = 全
 选型:worker ≈ 常态并发 × 单请求可占核数,与部署 CPU 配额对齐。rayon 池是**进程级全局**的,
 `RAYON_NUM_THREADS` 是延迟↔CPU 的直接权衡旋钮;容器建议同时把 `GOMAXPROCS` 与 CPU limit 对齐。
 
-### 7.4 GOMAXPROCS:跟随 pod CPU limit
+### 7.4 GOMAXPROCS:对齐 pod CPU limit
 
-- **延迟主导场景(典型,≥50ms 嵌入)完全不敏感**:70ms 嵌入下 GOMAXPROCS=1/4/宿主默认
-  全部 111 RPS,CPU 0.06~0.075 核——I/O 等待不占 CPU,调它没有意义
-- 高 RPS 场景(低延迟后端/0ms 饱和探测)超配有代价:16 P(宿主 16 核默认)vs 4 P,
-  总 CPU 4.32→3.12 核,GC 标记占比 12.3%→4.4%——超配的 P 是 GC 并行标记与调度同步的放大器
+- RPS/延迟对 GOMAXPROCS 不敏感(嵌入延迟主导,I/O 等待不占 CPU);但 **CPU 用量敏感**
+- 小 quota 下超配的 P 是净开销:500m limit 实测(70ms 嵌入)GOMAXPROCS=4 → 1:
+  c=32 CPU 0.224→0.175 核、c=64 0.435→0.345 核(−21~32%),限流周期 181→1,
+  p99 79.3→76.4ms——GC 并行标记与调度自旋被小 quota 放大
 - `GOMAXPROCS=1` 对 candle 模式毫无影响(推理走 rayon 原生线程池,不经 Go 调度器)
-- 生产:GOMAXPROCS 跟随 pod CPU limit(automaxprocs),不是宿主核数;失配会触发 CFS throttling
+- 生产:GOMAXPROCS = pod CPU limit 向上取整(500m→1、1C→1),不是宿主核数;
+  失配既触发 CFS throttling 又浪费 CPU
 
 ### 7.5 吞吐量纲速查
 
-- 远程嵌入:吞吐 ≈ `并发 / 嵌入延迟`;路由服务自身 ~0.42ms CPU/req(base64 后),水平扩副本线性扩展
+- 远程嵌入:吞吐 ≈ `并发 / 嵌入延迟`;路由服务自身 ~0.4ms CPU/req(base64 后,GOMAXPROCS 对齐 limit),水平扩副本线性扩展
 - 内置嵌入:CPU/req 随线程数与模型大小变化,常驻内存 ~2.5GB(Qwen3-0.6B)
 - keyword:0.36ms CPU/req,无优化必要
 
-### 7.6 资源水位与 limit/request(cgroup v2 实测,70ms 典型)
+### 7.6 资源水位与 limit 下限(cgroup v2 实测,70ms 典型,GOMAXPROCS=1)
 
-| 水位 | 场景 | RPS | CPU | 内存 |
+| 水位 | 场景 | RPS | CPU | 限流 |
 | --- | --- | --- | --- | --- |
-| 空闲 | 无流量 | 0 | 0.001 核 | RSS 8Mi |
-| 典型 | 70ms 嵌入延迟,c=8 | 111 | 0.075 核 | RSS ~15Mi |
-| 扩展 | 70ms 嵌入延迟,c=32 | 445 | 0.23 核 | RSS ~15Mi |
-| 饱和上限探测 | 0ms mock 压满 CPU 路径,c=32 | 8,757 | 3.32 核(GOMAXPROCS=4 封顶) | peak 19.8Mi |
+| 空闲 | 无流量 | 0 | 0.001 核 | 无 |
+| 典型 | c=8 | 111 | 0.048 核 | 无 |
+| 扩展 | c=32 | 445 | 0.175 核(500m quota 的 35%) | 无 |
+| 边缘 | c=64 | 890 | 0.345 核(69%) | 1 个周期,无感 |
+| quota 封顶 | c=128 | ~1,300(封顶) | 0.5 核钉满 | 持续,p50 抬到 99ms |
 
-- 容量公式:CPU ≈ RPS × 0.42ms;单副本吞吐 ≈ 并发 / 嵌入延迟;
-  嵌入延迟主导(≥50ms)时单副本 CPU 需求通常 <0.25 核
-- 建议:request `cpu 250m / memory 64Mi`,limit `cpu 4 / memory 256Mi`;
-  limit cpu 与 GOMAXPROCS 对齐(GOMAXPROCS ≤ limit,避免 CFS throttling 抬延迟)
+- 容量公式:CPU ≈ RPS × 0.4ms;单副本吞吐 ≈ 并发 / 嵌入延迟;500m quota 吞吐封顶
+  ~1,300 RPS,超过后排队劣化但平缓(延迟抬升、无错误)
+- **limit 下限已验证**(c=8/32/64 全速、延迟与无限制一致):1C 与 500m 零损失;
+  250m 在 c≤32 可用(轻微限流 0.08s/60s,无感)
+- 建议:request `cpu 250m / memory 64Mi`,limit `cpu 500m / memory 256Mi`,`GOMAXPROCS=1`;
+  预算紧张且 ≤445 RPS 的场景可降到 250m
 
 ---
 
@@ -446,3 +450,46 @@ docker build -t decision-server:latest .
 | 无关请求被路由到某个决策 | `enable_soft_matching` 默认开启,0.5 兜底生效 | 显式 `enable_soft_matching: false`,按 4.3 重校准 |
 | 改述查询全部落到 default | 阈值过高或 candidates 覆盖不足 | 补口语化候选(实测最有效),再微调阈值 |
 | decide 返回 500 且日志有 embed 调用失败 | 远程嵌入不可达/超时 | 检查 `base_url` 连通性与 `timeout_seconds`;启动预热失败会直接不就绪 |
+
+---
+
+## 10. 路由决策模式总览与配置启用(2026-09-01 裁剪核查)
+
+裁剪只移除了**内置文本嵌入后端**(`backend: candle`/`openvino` 的语义嵌入);其余路由决策模式全部保留,按配置启用。
+
+### 10.1 信号类型(signals)
+
+| 信号 | 配置入口 | 依赖 | 状态 |
+| --- | --- | --- | --- |
+| keyword(regex) | `signals.keywords[].method: regex` | 纯 Go | ✓ 实切验证 |
+| keyword(bm25/ngram) | `method: bm25` / `method: ngram` | nlp-binding .so(cgo) | ✓ 分发路径完好,镜像内 `libnlp_binding.so` 在位 |
+| embedding(语义) | `signals.embeddings[]` | openai_compatible 远程端点 | ✓ 实切验证;本地后端已移除,误配 `backend: candle` 启动即报错 |
+| domain / fact-check / feedback | 对应 rules 段 | mmBERT .so(cgo)+ 模型文件 | ✓ |
+| pii / jailbreak | `pii_rules` / `jailbreak_rules` | mmBERT .so(cgo)+ 模型文件 | ✓ |
+| language | `language_rules` | 纯 Go(lingua-go) | ✓ |
+| context / structure / complexity / reask / preference | 对应 rules 段 | 纯 Go 启发式/规则 | ✓ |
+| modality(多模态图像) | modality 信号 | 多模态 .so(cgo) | ✓ |
+| kb / conversation / event / metadata / classifier | 对应段 | 规则(可选 ML) | ✓ |
+
+信号按需计算:仅被决策引用的信号类型才会评估,未引用的自动跳过。
+ML 类信号(domain/fact-check/feedback/pii/jailbreak/modality)需要对应模型文件随部署分发;
+纯远程嵌入部署(不带模型文件)时这些信号不可用,keyword/远程嵌入/规则类信号不受影响。
+
+### 10.2 模型选择算法(selection)
+
+| method | 向量依赖 | 状态 |
+| --- | --- | --- |
+| static(默认) | 无 | ✓ |
+| elo / latency_aware / multi_factor / automix / rl_driven | 无 | ✓ |
+| router_dc / gmt_router | 查询向量,一律来自远程嵌入 | ✓(需配置 openai_compatible) |
+| hybrid | elo+automix+router_dc 组合,DC 分量需向量 | ✓ |
+
+### 10.3 配置切换与验证记录
+
+- 切换方式:ConfigMap 放多份配置 → 部署 `-config` 指向对应文件(测试床 ConfigMap 内置
+  config-keyword / config-remote / config-remote-b64 / config-candle 四份;
+  config-candle 为已移除后端的旧配置,启动报错属预期)
+- `EMBEDDING_BACKEND` 环境变量可覆盖配置中的 backend;当前仅 `openai_compatible` 有效
+- 实切验证(裁剪后镜像):config-keyword.yaml 启动正常,keyword 命中
+  `keyword:code_request_markers`(confidence=1),无匹配正确落 default;
+  切回 config-remote-b64.yaml 后 confidence 与基线逐位一致(0.916926171630621)
