@@ -359,12 +359,27 @@ candle 推理走 Rust rayon **进程级全局**线程池,默认 worker 数 = 全
 - `GOMAXPROCS=1` 对 candle 模式毫无影响(推理走 rayon 原生线程池,不经 Go 调度器)
 - 延迟主导场景(如 70ms 嵌入)下 GOMAXPROCS 不敏感(CPU 需求仅 ~0.06 核)
 - 生产:GOMAXPROCS 跟随 pod CPU limit(automaxprocs),不是宿主核数;失配会触发 CFS throttling
+- 开销机制:P 数超过实际 CPU 需求时,GC 并行标记与调度同步成为净开销
+  (实测 =16 时 GC 标记占总 CPU 12.3%,=4 时 4.4%)
 
 ### 7.5 吞吐量纲速查
 
 - 远程嵌入:吞吐上限 ≈ `并发 × 1/嵌入延迟`;路由服务自身 ~1ms CPU/req(修复后),水平扩副本线性扩展
 - 内置嵌入:CPU/req 随线程数与模型大小变化,常驻内存 ~2.5GB(Qwen3-0.6B)
 - keyword:0.36ms CPU/req,无优化必要
+
+### 7.6 资源水位与 limit/request(cgroup v2 实测,GOMAXPROCS=4)
+
+| 水位 | 场景 | RPS | CPU | 内存 |
+| --- | --- | --- | --- | --- |
+| 空闲 | 无流量 | 0 | 0.001 核 | RSS 8Mi |
+| 常态 | 70ms 嵌入延迟,c=8 | 111 | 0.075 核 | RSS ~15Mi |
+| 高压 | 0ms 嵌入,c=8 | ~6,500 | 3.28 核 | RSS 14.4Mi |
+| 饱和 | 0ms 嵌入,c=32 | 7,483 | 3.55 核(封顶) | peak 19.8Mi,p99 12.7ms |
+
+- 容量公式:CPU ≈ RPS × 0.5ms;嵌入延迟主导(≥50ms)时单副本 CPU 需求通常 <0.1 核
+- 建议:request `cpu 250m / memory 64Mi`,limit `cpu 4 / memory 256Mi`;
+  limit cpu 与 GOMAXPROCS 对齐(GOMAXPROCS ≤ limit,避免 CFS throttling 抬延迟)
 
 ---
 
