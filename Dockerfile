@@ -43,8 +43,6 @@ WORKDIR /src
 COPY src/semantic-router/go.mod src/semantic-router/go.sum ./src/semantic-router/
 COPY candle-binding/go.mod ./candle-binding/
 COPY nlp-binding/go.mod ./nlp-binding/
-COPY ml-binding/go.mod ./ml-binding/
-COPY openvino-binding/go.mod ./openvino-binding/
 RUN cd src/semantic-router && go mod download
 # 源码层
 COPY candle-binding/ ./candle-binding/

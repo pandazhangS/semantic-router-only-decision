@@ -4,14 +4,9 @@ go 1.25.0
 
 replace (
 	github.com/vllm-project/semantic-router/candle-binding => ../../candle-binding
-	github.com/vllm-project/semantic-router/ml-binding => ../../ml-binding
 	github.com/vllm-project/semantic-router/nlp-binding => ../../nlp-binding
-	github.com/vllm-project/semantic-router/openvino-binding => ../../openvino-binding
-	github.com/vllm-project/semantic-router/src/semantic-router/pkg/cache => ./pkg/cache
 	github.com/vllm-project/semantic-router/src/semantic-router/pkg/config => ./pkg/config
-	github.com/vllm-project/semantic-router/src/semantic-router/pkg/extproc => ./pkg/extproc
 	github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability => ./pkg/observability
-	github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/metrics => ./pkg/metrics
 )
 
 require (
@@ -28,7 +23,6 @@ require (
 	github.com/tidwall/gjson v1.18.0
 	github.com/vllm-project/semantic-router/candle-binding v0.0.0-00010101000000-000000000000
 	github.com/vllm-project/semantic-router/nlp-binding v0.0.0-00010101000000-000000000000
-	github.com/vllm-project/semantic-router/openvino-binding v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/otel v1.43.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.34.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.38.0
