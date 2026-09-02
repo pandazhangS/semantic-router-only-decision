@@ -1,0 +1,53 @@
+# decision-server(CPU 决策面)+ domain-classifier(独立分类面)分离部署
+# 详解见 wiki/guides/domain-classifier-split-deployment.md
+
+domainClassifier:
+  enabled: true
+  image: domain-classifier:latest
+  imagePullPolicy: IfNotPresent
+  replicas: 1
+  port: 8090
+  # 模型目录(宿主路径最简;生产建议改成 PVC)。目录需包含:
+  #   model.safetensors config.json tokenizer.json tokenizer_config.json
+  #   special_tokens_map.json category_mapping.json
+  # 获取: hf-mirror.com/llm-semantic-router/mmbert32k-intent-classifier-merged
+  model:
+    hostPath: /tmp/domain-model
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 3Gi
+  # GPU/独占 CPU 节点时在此填写 nodeSelector / tolerations
+  nodeSelector: {}
+  tolerations: []
+
+decisionServer:
+  image: decision-server:latest
+  imagePullPolicy: IfNotPresent
+  replicas: 2
+  port: 8080
+  embedding:
+    baseUrl: http://embedding-service:8000/v1
+    model: BAAI/bge-m3
+    apiKeyEnv: EMBEDDING_API_KEY
+    # 生产请用已有 secret/外部注入;此处仅示例
+    apiKey: ""
+  domain:
+    # 分类服务的集群内地址(k8s Service DNS)
+    endpointAddress: domain-classifier-svc
+    endpointPort: 8090
+    # domain 信号阈值(与本地模式同义)
+    threshold: 0.5
+    fallbackCategory: other
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  nodeSelector: {}
+  tolerations: []

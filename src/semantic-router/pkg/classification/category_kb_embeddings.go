@@ -66,6 +66,17 @@ func (c *KnowledgeBaseClassifier) embedText(text string) ([]float32, error) {
 	return output.Embedding, nil
 }
 
+// embedTextForRequest resolves the request-time query embedding through the
+// request-scoped cache when the remote provider is active. Exemplar preload
+// keeps using embedText directly (it runs once per classifier, not per
+// request).
+func (c *KnowledgeBaseClassifier) embedTextForRequest(text string, cache *requestTextEmbeddingCache) ([]float32, error) {
+	if c.provider != nil {
+		return resolveProviderTextEmbedding(c.provider, text, cache)
+	}
+	return c.embedText(text)
+}
+
 func (c *KnowledgeBaseClassifier) embedExemplarsParallel(refs []exemplarRef) <-chan embeddingResult {
 	numWorkers := runtime.NumCPU()
 	backend := embeddingBackendOverride()

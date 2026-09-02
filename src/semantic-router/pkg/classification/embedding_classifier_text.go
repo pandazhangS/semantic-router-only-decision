@@ -44,6 +44,15 @@ func (c *EmbeddingClassifier) ClassifyAll(text string) ([]MatchedRule, error) {
 // output shaping. Only rules whose effective QueryModality is "text"
 // participate. For image/audio queries, use ClassifyDetailedMultimodal.
 func (c *EmbeddingClassifier) ClassifyDetailed(text string) (*EmbeddingClassificationResult, error) {
+	return c.ClassifyDetailedWithCache(text, nil)
+}
+
+// ClassifyDetailedWithCache is ClassifyDetailed with a request-scoped text
+// embedding cache. When cache is non-nil and the remote provider backend is
+// active, the query embedding is resolved through the cache so sibling
+// signals (complexity, KB) embedding the same request text within this
+// request share one remote call. Other backends ignore the cache.
+func (c *EmbeddingClassifier) ClassifyDetailedWithCache(text string, cache *requestTextEmbeddingCache) (*EmbeddingClassificationResult, error) {
 	if len(c.rules) == 0 {
 		return &EmbeddingClassificationResult{}, nil
 	}
@@ -61,7 +70,7 @@ func (c *EmbeddingClassifier) ClassifyDetailed(text string) (*EmbeddingClassific
 	}
 
 	modelType := c.getModelType()
-	queryEmbedding, err := c.computeEmbedding(text, modelType)
+	queryEmbedding, err := c.computeEmbeddingForRequest(text, modelType, cache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute query embedding: %w", err)
 	}

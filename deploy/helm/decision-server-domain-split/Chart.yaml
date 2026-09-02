@@ -1,0 +1,8 @@
+apiVersion: v2
+name: decision-server-domain-split
+description: >-
+  CPU/GPU 分离部署拓扑:decision-server 路由决策面(CPU,category_model.protocol=http_classify)
+  + 独立 domain-classifier 服务(mmBERT/ModernBERT 权重,可 GPU/独占 CPU 节点)。
+type: application
+version: 0.1.0
+appVersion: "v0.3"

@@ -194,6 +194,13 @@ func (c *Classifier) evaluateAllSignalsWithContext(
 		imgCache = newRequestImageEmbeddingCache()
 	}
 
+	// Request-scoped text embedding cache: the embedding, complexity, and KB
+	// signal evaluators each embed the same request text through the shared
+	// remote provider in independent goroutines; the cache collapses those
+	// into one call per unique text. It dies with the request, so there is
+	// no cross-request state to leak or evict.
+	txtCache := newRequestTextEmbeddingCache()
+
 	dispatchers := c.buildSignalDispatchers(
 		results,
 		&mu,
@@ -205,6 +212,7 @@ func (c *Classifier) evaluateAllSignalsWithContext(
 		hasPriorAssistantReply,
 		imgArg,
 		imgCache,
+		txtCache,
 		convFacts,
 		requestFacts,
 		usedSignals,

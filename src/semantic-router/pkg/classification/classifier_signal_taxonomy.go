@@ -11,7 +11,9 @@ import (
 
 // evaluateKBSignals runs all configured knowledge bases, records structured KB
 // results, and maps routing.signals.kb bindings into normal matched signals.
-func (c *Classifier) evaluateKBSignals(results *SignalResults, mu *sync.Mutex, text string) {
+// txtCache dedupes the per-KB query embedding against sibling text-embedding
+// signals within this request.
+func (c *Classifier) evaluateKBSignals(results *SignalResults, mu *sync.Mutex, text string, txtCache *requestTextEmbeddingCache) {
 	if len(c.kbClassifiers) == 0 {
 		return
 	}
@@ -19,7 +21,7 @@ func (c *Classifier) evaluateKBSignals(results *SignalResults, mu *sync.Mutex, t
 	start := time.Now()
 	classifierResults := make(map[string]*KBClassifyResult, len(c.kbClassifiers))
 	for name, classifier := range c.kbClassifiers {
-		classifyResult, err := classifier.Classify(text)
+		classifyResult, err := classifier.ClassifyWithCache(text, txtCache)
 		if err != nil {
 			logging.Warnf("[KB Signal] KB %q failed: %v", name, err)
 			continue

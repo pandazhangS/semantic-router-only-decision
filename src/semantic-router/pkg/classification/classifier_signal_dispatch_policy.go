@@ -14,6 +14,7 @@ func (c *Classifier) buildPolicySignalDispatchers(
 	nonUserMessages []string,
 	convFacts ConversationFacts,
 	requestFacts RequestFacts,
+	txtCache *requestTextEmbeddingCache,
 	usedSignals map[string]bool,
 ) []signalDispatch {
 	var (
@@ -55,7 +56,7 @@ func (c *Classifier) buildPolicySignalDispatchers(
 		},
 		{
 			config.SignalTypeKB, "KB",
-			func() { c.evaluateKBSignals(results, mu, textForSignal(config.SignalTypeKB)) },
+			func() { c.evaluateKBSignals(results, mu, textForSignal(config.SignalTypeKB), txtCache) },
 		},
 		{
 			config.SignalTypeConversation, "Conversation",

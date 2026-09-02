@@ -127,21 +127,23 @@ func (c *ComplexityClassifier) ClassifyWithImage(query string, imageURL string) 
 }
 
 func (c *ComplexityClassifier) ClassifyDetailedWithImage(query string, imageURL string) ([]ComplexityRuleResult, error) {
-	return c.classifyDetailedWithImageCached(query, imageURL, nil)
+	return c.classifyDetailedWithImageCached(query, imageURL, nil, nil)
 }
 
 // classifyDetailedWithImageCached is the cache-aware variant of
-// ClassifyDetailedWithImage. When cache is non-nil it dedupes the multimodal
-// image FFI call against any sibling signal evaluator that already resolved
-// the same (imageURL, targetDim=0) pair within this request. Text-side
-// embeddings (text and mmText) are not cached because no other signal
-// currently consumes the multimodal text embedding.
-func (c *ComplexityClassifier) classifyDetailedWithImageCached(query string, imageURL string, cache *requestImageEmbeddingCache) ([]ComplexityRuleResult, error) {
+// ClassifyDetailedWithImage. When imgCache is non-nil it dedupes the
+// multimodal image FFI call against any sibling signal evaluator that
+// already resolved the same (imageURL, targetDim=0) pair within this
+// request. When txtCache is non-nil the remote-provider text query
+// embedding is deduped against sibling signals (embedding, KB) embedding
+// the same request text; mmText and local-backend text embeddings are not
+// cached because no other signal consumes them.
+func (c *ComplexityClassifier) classifyDetailedWithImageCached(query string, imageURL string, cache *requestImageEmbeddingCache, txtCache *requestTextEmbeddingCache) ([]ComplexityRuleResult, error) {
 	if len(c.rules) == 0 {
 		return nil, nil
 	}
 
-	queryEmbeddings, err := c.loadQueryEmbeddingsCached(query, imageURL, cache)
+	queryEmbeddings, err := c.loadQueryEmbeddingsCached(query, imageURL, cache, txtCache)
 	if err != nil {
 		return nil, err
 	}

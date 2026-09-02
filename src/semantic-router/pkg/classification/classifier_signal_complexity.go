@@ -9,9 +9,9 @@ import (
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
 )
 
-func (c *Classifier) evaluateComplexitySignal(results *SignalResults, mu *sync.Mutex, text string, imageURL string, imgCache *requestImageEmbeddingCache) {
+func (c *Classifier) evaluateComplexitySignal(results *SignalResults, mu *sync.Mutex, text string, imageURL string, imgCache *requestImageEmbeddingCache, txtCache *requestTextEmbeddingCache) {
 	start := time.Now()
-	classifyResults, err := c.complexityClassifier.classifyDetailedWithImageCached(text, imageURL, imgCache)
+	classifyResults, err := c.complexityClassifier.classifyDetailedWithImageCached(text, imageURL, imgCache, txtCache)
 	elapsed := time.Since(start)
 	latencySeconds := elapsed.Seconds()
 

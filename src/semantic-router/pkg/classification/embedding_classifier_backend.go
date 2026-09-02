@@ -200,3 +200,16 @@ func (c *EmbeddingClassifier) computeEmbedding(text string, modelType string, ph
 
 	return embedding, err
 }
+
+// computeEmbeddingForRequest routes the request-time query embedding through
+// the request-scoped cache when the remote provider backend is active. Local
+// backends (openvino/candle) bypass the cache: their embeddings depend on the
+// per-classifier modelType, which is not part of the cache key.
+func (c *EmbeddingClassifier) computeEmbeddingForRequest(text string, modelType string, cache *requestTextEmbeddingCache) ([]float32, error) {
+	if cache == nil || c.getBackend() != config.EmbeddingBackendOpenAICompatible || c.provider == nil {
+		return c.computeEmbedding(text, modelType)
+	}
+	return cache.resolve(text, func() ([]float32, error) {
+		return c.provider.Embed(context.Background(), text)
+	})
+}

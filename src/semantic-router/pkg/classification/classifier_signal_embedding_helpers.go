@@ -9,7 +9,7 @@ import (
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
 )
 
-func (c *Classifier) evaluateEmbeddingSignal(results *SignalResults, mu *sync.Mutex, text string, imageURL string, imgCache *requestImageEmbeddingCache) {
+func (c *Classifier) evaluateEmbeddingSignal(results *SignalResults, mu *sync.Mutex, text string, imageURL string, imgCache *requestImageEmbeddingCache, txtCache *requestTextEmbeddingCache) {
 	start := time.Now()
 
 	// Text-modality evaluation: scores rules whose query_modality is unset
@@ -24,7 +24,7 @@ func (c *Classifier) evaluateEmbeddingSignal(results *SignalResults, mu *sync.Mu
 	)
 	if strings.TrimSpace(text) != "" {
 		textStart := time.Now()
-		textResult, textErr = c.keywordEmbeddingClassifier.ClassifyDetailed(text)
+		textResult, textErr = c.keywordEmbeddingClassifier.ClassifyDetailedWithCache(text, txtCache)
 		textElapsed = time.Since(textStart)
 	}
 

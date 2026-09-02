@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: decision-server
+  labels:
+    app: decision-server
+spec:
+  replicas: {{ .Values.decisionServer.replicas }}
+  selector:
+    matchLabels:
+      app: decision-server
+  template:
+    metadata:
+      labels:
+        app: decision-server
+    spec:
+      {{- with .Values.decisionServer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.decisionServer.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: decision-server
+          image: {{ .Values.decisionServer.image }}
+          imagePullPolicy: {{ .Values.decisionServer.imagePullPolicy }}
+          args:
+            - -config
+            - /etc/decision-server/config.yaml
+            - -listen
+            - :{{ .Values.decisionServer.port }}
+          env:
+            - name: EMBEDDING_API_KEY
+              value: {{ .Values.decisionServer.embedding.apiKey | quote }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.decisionServer.port }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/decision-server
+              readOnly: true
+          resources:
+            {{- toYaml .Values.decisionServer.resources | nindent 12 }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.decisionServer.port }}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: {{ .Values.decisionServer.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "decision-server-domain-split.name" . }}-config

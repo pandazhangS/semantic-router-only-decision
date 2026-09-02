@@ -25,6 +25,12 @@ type CategoryModel struct {
 	UseMmBERT32K        bool    `yaml:"use_mmbert_32k"`
 	CategoryMappingPath string  `yaml:"category_mapping_path"`
 	FallbackCategory    string  `yaml:"fallback_category,omitempty"`
+	// Protocol optionally serves the domain classifier from an external
+	// service instead of the in-process candle model (supported:
+	// http_classify). Requires a global.model_catalog.external[] entry with
+	// model_role="classification" and the category_mapping_path asset for
+	// label alignment; model_id stays required as the logical model name.
+	Protocol string `yaml:"protocol,omitempty"`
 }
 
 type PIIModel struct {

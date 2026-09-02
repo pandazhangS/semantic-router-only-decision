@@ -1,7 +1,6 @@
 package classification
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
@@ -13,9 +12,9 @@ type complexityQueryEmbeddings struct {
 	image  []float32
 }
 
-func (c *ComplexityClassifier) loadQueryEmbeddingsCached(query string, imageURL string, cache *requestImageEmbeddingCache) (complexityQueryEmbeddings, error) {
+func (c *ComplexityClassifier) loadQueryEmbeddingsCached(query string, imageURL string, cache *requestImageEmbeddingCache, txtCache *requestTextEmbeddingCache) (complexityQueryEmbeddings, error) {
 	if c.provider != nil {
-		embedding, err := c.provider.Embed(context.Background(), query)
+		embedding, err := resolveProviderTextEmbedding(c.provider, query, txtCache)
 		if err != nil {
 			return complexityQueryEmbeddings{}, fmt.Errorf("failed to compute query embedding: %w", err)
 		}

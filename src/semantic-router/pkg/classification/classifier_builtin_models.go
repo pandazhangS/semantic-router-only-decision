@@ -15,8 +15,22 @@ func (c *Classifier) IsCategoryEnabled() bool {
 
 // initializeCategoryClassifier initializes the category classification model.
 func (c *Classifier) initializeCategoryClassifier() error {
-	if !c.IsCategoryEnabled() || c.categoryInitializer == nil {
+	if !c.IsCategoryEnabled() {
 		return fmt.Errorf("category classification is not properly configured")
+	}
+
+	if c.Config.CategoryModel.Protocol != "" {
+		// Remote backends have no local model to initialize.
+		externalCfg := c.Config.FindExternalModelByRole(config.ModelRoleClassification)
+		logging.ComponentEvent("classifier", "category_classifier_init_started", map[string]interface{}{
+			"mode":      c.Config.CategoryModel.Protocol,
+			"model_ref": externalCfg.ModelName,
+		})
+		return nil
+	}
+
+	if c.categoryInitializer == nil {
+		return fmt.Errorf("category initializer is required for Candle-based inference")
 	}
 
 	numClasses := c.CategoryMapping.GetCategoryCount()

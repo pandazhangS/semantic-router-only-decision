@@ -124,6 +124,14 @@ func (c *KnowledgeBaseClassifier) loadDefinition() error {
 }
 
 func (c *KnowledgeBaseClassifier) Classify(text string) (*KBClassifyResult, error) {
+	return c.ClassifyWithCache(text, nil)
+}
+
+// ClassifyWithCache is Classify with a request-scoped text embedding cache.
+// When cache is non-nil and the remote provider is active, the query
+// embedding is resolved through the cache so sibling signals (embedding,
+// complexity) embedding the same request text share one remote call.
+func (c *KnowledgeBaseClassifier) ClassifyWithCache(text string, cache *requestTextEmbeddingCache) (*KBClassifyResult, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, fmt.Errorf("KB classification: query must be provided")
 	}
@@ -132,7 +140,7 @@ func (c *KnowledgeBaseClassifier) Classify(text string) (*KBClassifyResult, erro
 	if err := c.ensureEmbeddingsPreloaded(); err != nil {
 		return nil, fmt.Errorf("failed to ensure KB embeddings are loaded: %w", err)
 	}
-	queryEmbedding, err := c.embedText(text)
+	queryEmbedding, err := c.embedTextForRequest(text, cache)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute query embedding: %w", err)
 	}

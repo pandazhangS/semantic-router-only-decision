@@ -2325,6 +2325,12 @@ global:
           use_mmbert_32k: true
           category_mapping_path: models/mmbert32k-intent-classifier-merged/category_mapping.json
           fallback_category: other
+          # Optional: serve the domain classifier from an external service
+          # (http_classify) instead of the in-process candle model. Requires
+          # an external model entry with model_role=classification and the
+          # category_mapping_path asset for label alignment; empty keeps the
+          # local model path.
+          protocol: ""
         mcp:
           enabled: true
           transport_type: stdio

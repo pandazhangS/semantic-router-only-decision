@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: domain-classifier
+  labels:
+    app: domain-classifier
+spec:
+  replicas: {{ .Values.domainClassifier.replicas }}
+  selector:
+    matchLabels:
+      app: domain-classifier
+  template:
+    metadata:
+      labels:
+        app: domain-classifier
+    spec:
+      {{- with .Values.domainClassifier.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.domainClassifier.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: domain-classifier
+          image: {{ .Values.domainClassifier.image }}
+          imagePullPolicy: {{ .Values.domainClassifier.imagePullPolicy }}
+          args:
+            - -model
+            - /models/domain
+            - -mapping
+            - /models/domain/category_mapping.json
+            - -addr
+            - :{{ .Values.domainClassifier.port }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.domainClassifier.port }}
+          volumeMounts:
+            - name: model
+              mountPath: /models/domain
+              readOnly: true
+          resources:
+            {{- toYaml .Values.domainClassifier.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.domainClassifier.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.domainClassifier.port }}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: model
+          hostPath:
+            path: {{ .Values.domainClassifier.model.hostPath }}
+            type: Directory

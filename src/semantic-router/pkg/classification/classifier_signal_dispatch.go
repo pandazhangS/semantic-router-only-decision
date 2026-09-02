@@ -24,6 +24,7 @@ func (c *Classifier) buildSignalDispatchers(
 	hasPriorAssistantReply bool,
 	imgArg string,
 	imgCache *requestImageEmbeddingCache, // may be nil; both image-consuming evaluators handle nil via cache.resolve's nil-receiver fallthrough
+	txtCache *requestTextEmbeddingCache, // may be nil; text-embedding consumers (embedding/complexity/KB) handle nil via cache.resolve's nil-receiver fallthrough
 	convFacts ConversationFacts,
 	requestFacts RequestFacts,
 	usedSignals map[string]bool,
@@ -37,6 +38,7 @@ func (c *Classifier) buildSignalDispatchers(
 		hasPriorAssistantReply,
 		imgArg,
 		imgCache,
+		txtCache,
 	)
 	dispatchers = append(dispatchers, c.buildRequestFactSignalDispatchers(
 		results,
@@ -46,6 +48,7 @@ func (c *Classifier) buildSignalDispatchers(
 		currentUserText,
 		imgArg,
 		imgCache,
+		txtCache,
 		requestFacts,
 	)...)
 	return append(
@@ -58,6 +61,7 @@ func (c *Classifier) buildSignalDispatchers(
 			nonUserMessages,
 			convFacts,
 			requestFacts,
+			txtCache,
 			usedSignals,
 		)...,
 	)
@@ -72,6 +76,7 @@ func (c *Classifier) buildPrimarySignalDispatchers(
 	hasPriorAssistantReply bool,
 	imgArg string,
 	imgCache *requestImageEmbeddingCache,
+	txtCache *requestTextEmbeddingCache,
 ) []signalDispatch {
 	return []signalDispatch{
 		{
@@ -81,7 +86,7 @@ func (c *Classifier) buildPrimarySignalDispatchers(
 		{
 			config.SignalTypeEmbedding, "Embedding",
 			func() {
-				c.evaluateEmbeddingSignal(results, mu, textForSignal(config.SignalTypeEmbedding), imgArg, imgCache)
+				c.evaluateEmbeddingSignal(results, mu, textForSignal(config.SignalTypeEmbedding), imgArg, imgCache, txtCache)
 			},
 		},
 		{
@@ -126,6 +131,7 @@ func (c *Classifier) buildRequestFactSignalDispatchers(
 	currentUserText string,
 	imgArg string,
 	imgCache *requestImageEmbeddingCache,
+	txtCache *requestTextEmbeddingCache,
 	requestFacts RequestFacts,
 ) []signalDispatch {
 	return []signalDispatch{
@@ -154,7 +160,7 @@ func (c *Classifier) buildRequestFactSignalDispatchers(
 		{
 			config.SignalTypeComplexity, "Complexity",
 			func() {
-				c.evaluateComplexitySignal(results, mu, textForSignal(config.SignalTypeComplexity), imgArg, imgCache)
+				c.evaluateComplexitySignal(results, mu, textForSignal(config.SignalTypeComplexity), imgArg, imgCache, txtCache)
 			},
 		},
 		{

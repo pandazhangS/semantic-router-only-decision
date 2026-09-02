@@ -7,13 +7,28 @@ import (
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
 )
 
-func (b *classifierOptionBuilder) addCategoryClassifier(categoryMapping *CategoryMapping) {
-	if b.cfg.CategoryModel.ModelID == "" {
-		return
+func (b *classifierOptionBuilder) addCategoryClassifier(categoryMapping *CategoryMapping) error {
+	categoryModel := b.cfg.CategoryModel
+	if categoryModel.ModelID == "" && categoryModel.Protocol == "" {
+		return nil
+	}
+	if categoryModel.Protocol != "" {
+		categoryInference, err := createRemoteCategoryInference(b.cfg, categoryMapping)
+		if err != nil {
+			return err
+		}
+		logging.ComponentEvent("classifier", "category_classifier_backend_selected", map[string]interface{}{
+			"backend":  "http_classify",
+			"protocol": categoryModel.Protocol,
+			"model":    categoryModel.ModelID,
+		})
+		// Remote backends have no local model to initialize.
+		b.options = append(b.options, withCategory(categoryMapping, nil, categoryInference))
+		return nil
 	}
 	var categoryInitializer CategoryInitializer
 	var categoryInference CategoryInference
-	if b.cfg.CategoryModel.UseMmBERT32K {
+	if categoryModel.UseMmBERT32K {
 		logging.ComponentEvent("classifier", "category_classifier_backend_selected", map[string]interface{}{
 			"backend": "mmbert_32k",
 		})
@@ -24,6 +39,7 @@ func (b *classifierOptionBuilder) addCategoryClassifier(categoryMapping *Categor
 		categoryInference = createCategoryInference()
 	}
 	b.options = append(b.options, withCategory(categoryMapping, categoryInitializer, categoryInference))
+	return nil
 }
 
 func buildJailbreakDependencies(cfg *config.RouterConfig, jailbreakMapping *JailbreakMapping) (JailbreakInitializer, SequenceClassifierBackend, error) {

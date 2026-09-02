@@ -52,6 +52,20 @@ const (
 	PromptGuardProtocolHTTPClassify = "http_classify"
 )
 
+// CategoryModel.Protocol values, selecting which remote HTTP wire contract
+// serves the domain classifier from an external model with
+// model_role="classification". Mutually exclusive with the local
+// candle model path (model_id + use_mmbert_32k/use_modernbert).
+const (
+	// CategoryProtocolHTTPClassify calls an external classifier through the
+	// same lightweight sequence-classifier HTTP contract as
+	// PromptGuardProtocolHTTPClassify: POST /classify with {"inputs": ...},
+	// full label/score distribution out. Response labels are aligned by name
+	// against category_model.category_mapping_path, so the external service
+	// must serve every label of that mapping.
+	CategoryProtocolHTTPClassify = "http_classify"
+)
+
 // PromptGuardConfig.OnError values live in classifier_on_error.go as
 // OnErrorAllow/OnErrorBlock - shared with every other pluggable classifier
 // backend (CategoryModel, PIIModel, ClassifierSignalRule), not just prompt

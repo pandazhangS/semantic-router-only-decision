@@ -51,8 +51,27 @@ COPY --from=bindings /build/candle-binding/target/release/ ./candle-binding/targ
 COPY --from=bindings /build/nlp-binding/target/release/ ./nlp-binding/target/release/
 COPY src/semantic-router/ ./src/semantic-router/
 RUN cd src/semantic-router && go build -o /out/decision-server ./cmd/decision-server
+RUN cd src/semantic-router && go build -o /out/domain-classifier ./cmd/domain-classifier
 
-# ---------- Stage 3: 运行时 ----------
+# ---------- Stage 3: 独立 domain 分类服务（可选模式：与决策面异构部署） ----------
+# 构建：docker build --target domain-classifier -t domain-classifier:latest .
+# 运行：docker run -p 8090:8090 \
+#         -v /path/to/category-model:/models/domain \
+#         -v /path/to/config/category_labels.json:/config/category_labels.json \
+#       domain-classifier:latest \
+#         -model /models/domain -mapping /config/category_labels.json -addr :8090
+FROM debian:bookworm-slim AS domain-classifier
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libgcc-s1 ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/domain-classifier /usr/local/bin/domain-classifier
+COPY --from=bindings /build/candle-binding/target/release/libcandle_semantic_router.so /usr/local/lib/
+ENV LD_LIBRARY_PATH=/usr/local/lib
+EXPOSE 8090
+ENTRYPOINT ["domain-classifier"]
+CMD ["-addr", ":8090"]
+
+# ---------- Stage 4: 运行时 ----------
 FROM debian:bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libgcc-s1 ca-certificates \

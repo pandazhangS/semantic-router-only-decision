@@ -1,0 +1,117 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "decision-server-domain-split.name" . }}-config
+  labels:
+    app: decision-server
+data:
+  config.yaml: |
+    version: v0.3
+
+    global:
+      router:
+        auto_model_names:
+          - vllm-sr/auto
+        learning:
+          enabled: false
+      model_catalog:
+        external:
+          - name: domain-classifier-svc
+            llm_provider: classifiers
+            model_role: classification
+            llm_model_name: domain-classifier
+            llm_endpoint:
+              address: {{ .Values.decisionServer.domain.endpointAddress }}
+              port: {{ .Values.decisionServer.domain.endpointPort }}
+              protocol: http
+        modules:
+          classifier:
+            domain:
+              # 分离模式:domain 分类走独立 domain-classifier 服务
+              enabled: true
+              model_id: mmbert32k-intent-classifier-merged
+              protocol: http_classify
+              threshold: {{ .Values.decisionServer.domain.threshold }}
+              fallback_category: {{ .Values.decisionServer.domain.fallbackCategory }}
+              category_mapping_path: /models/domain/category_mapping.json
+
+    providers:
+      defaults:
+        default_model: qwen/qwen3.5-rocm
+        default_reasoning_effort: low
+      models:
+        - name: qwen/qwen3.5-rocm
+          provider_model_id: qwen/qwen3.5-rocm
+          backend_refs:
+            - endpoint: vllm:8000
+              name: vllm_primary
+              protocol: http
+              weight: 1
+        - name: google/gemini-3.1-pro
+          provider_model_id: google/gemini-3.1-pro
+          backend_refs:
+            - endpoint: vllm:8000
+              name: vllm_primary
+              protocol: http
+              weight: 1
+
+    routing:
+      modelCards:
+        - name: qwen/qwen3.5-rocm
+          description: Default low-cost model for general and coding tasks.
+          modality: text
+          quality_score: 0.7
+        - name: google/gemini-3.1-pro
+          description: High-quality reasoning model.
+          modality: text
+          quality_score: 0.9
+      signals:
+        domains:
+          - name: stem
+            description: Science, technology, engineering and math.
+            mmlu_categories: [math, physics, chemistry, engineering, "computer science"]
+          - name: humanities
+            description: Law, business, economics and social topics.
+            mmlu_categories: [law, business, economics, psychology, philosophy, health]
+          - name: other
+            description: General fallback traffic.
+            mmlu_categories: [other]
+      decisions:
+        - description: STEM questions go to the reasoning model.
+          name: domain_stem
+          priority: 90
+          rules:
+            operator: OR
+            conditions:
+              - type: domain
+                name: stem
+          modelRefs:
+            - model: google/gemini-3.1-pro
+              use_reasoning: true
+        - description: Default lane.
+          name: default_lane
+          priority: 10
+          rules:
+            operator: OR
+            conditions:
+              - type: domain
+                name: other
+          modelRefs:
+            - model: qwen/qwen3.5-rocm
+              use_reasoning: false
+
+    model_catalog:
+      embeddings:
+        semantic:
+          embedding_config:
+            backend: openai_compatible
+            model_type: remote
+            target_dimension: 1024
+          endpoint:
+            base_url: {{ .Values.decisionServer.embedding.baseUrl }}
+            model: {{ .Values.decisionServer.embedding.model }}
+            api_key_env: {{ .Values.decisionServer.embedding.apiKeyEnv }}
+            timeout_seconds: 5
+            max_retries: 2
+            dimensions: 1024
+            encoding_format: base64

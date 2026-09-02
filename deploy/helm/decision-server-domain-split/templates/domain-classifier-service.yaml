@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: domain-classifier-svc
+  labels:
+    app: domain-classifier
+spec:
+  selector:
+    app: domain-classifier
+  ports:
+    - name: http
+      port: {{ .Values.decisionServer.domain.endpointPort }}
+      targetPort: {{ .Values.domainClassifier.port }}

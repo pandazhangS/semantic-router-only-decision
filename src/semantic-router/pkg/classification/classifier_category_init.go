@@ -1,10 +1,12 @@
 package classification
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	candle_binding "github.com/vllm-project/semantic-router/candle-binding"
+	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/config"
 	"github.com/vllm-project/semantic-router/src/semantic-router/pkg/observability/logging"
 )
 
@@ -195,4 +197,72 @@ func (c *MmBERT32KCategoryInferenceImpl) ClassifyWithProbabilities(text string) 
 // createMmBERT32KCategoryInference creates mmBERT-32K category inference.
 func createMmBERT32KCategoryInference() CategoryInference {
 	return &MmBERT32KCategoryInferenceImpl{}
+}
+
+// createRemoteCategoryInference serves the domain classifier from an external
+// http_classify service (category_model.protocol), mirroring the jailbreak
+// remote-backend selection. The response label/score distribution is aligned
+// against the configured CategoryMapping by name, so the external service
+// must serve every label of that mapping.
+func createRemoteCategoryInference(cfg *config.RouterConfig, mapping *CategoryMapping) (CategoryInference, error) {
+	if cfg.CategoryModel.Protocol != config.CategoryProtocolHTTPClassify {
+		return nil, fmt.Errorf(
+			"category_model.protocol: unrecognized value %q (supported: %s)",
+			cfg.CategoryModel.Protocol,
+			config.CategoryProtocolHTTPClassify,
+		)
+	}
+	if isNilMapping(mapping) {
+		return nil, fmt.Errorf(
+			"category_mapping_path is required for category_model.protocol=%s",
+			config.CategoryProtocolHTTPClassify,
+		)
+	}
+	externalCfg := cfg.FindExternalModelByRole(config.ModelRoleClassification)
+	if externalCfg == nil {
+		return nil, fmt.Errorf(
+			"external model with model_role='%s' is required for category_model.protocol=%s",
+			config.ModelRoleClassification,
+			config.CategoryProtocolHTTPClassify,
+		)
+	}
+	if externalCfg.ModelEndpoint.Address == "" {
+		return nil, fmt.Errorf("external classification model endpoint address is required")
+	}
+	backend, err := NewHTTPClassifierInference(externalCfg, mapping)
+	if err != nil {
+		return nil, err
+	}
+	return &remoteCategoryInference{backend: backend}, nil
+}
+
+// remoteCategoryInference adapts the http_classify SequenceClassifierBackend
+// to the CategoryInference contract. The argmax/class confidence is derived
+// once here (via deriveArgmax) so every category backend - local candle,
+// mmBERT-32K, or remote HTTP - feeds matchDomainCategories identically.
+type remoteCategoryInference struct {
+	backend SequenceClassifierBackend
+}
+
+func (r *remoteCategoryInference) Classify(text string) (candle_binding.ClassResult, error) {
+	result, err := r.backend.Classify(context.Background(), text)
+	if err != nil {
+		return candle_binding.ClassResult{}, err
+	}
+	class, confidence := deriveArgmax(result.Probabilities)
+	return candle_binding.ClassResult{Class: class, Confidence: confidence}, nil
+}
+
+func (r *remoteCategoryInference) ClassifyWithProbabilities(text string) (candle_binding.ClassResultWithProbs, error) {
+	result, err := r.backend.Classify(context.Background(), text)
+	if err != nil {
+		return candle_binding.ClassResultWithProbs{}, err
+	}
+	class, confidence := deriveArgmax(result.Probabilities)
+	return candle_binding.ClassResultWithProbs{
+		Class:         class,
+		Confidence:    confidence,
+		Probabilities: result.Probabilities,
+		NumClasses:    len(result.Probabilities),
+	}, nil
 }
